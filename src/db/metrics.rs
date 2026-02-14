@@ -24,7 +24,7 @@ impl Database {
         Ok(())
     }
 
-    /// bathc inser metric (mush faster for bulk imports)
+    /// batch insert metrics (much faster for bulk imports)
     pub fn insert_metrics_batch(
         &self,
         metrics: &[(i64, &str, Option<i64>, Option<i64>, f64)],
@@ -69,7 +69,7 @@ impl Database {
         Ok(metrics)
     }
 
-    /// Get metrics for a spesific metric name (e.g., all "loss" entries)
+    /// Get metrics for a specific metric name (e.g., all "loss" entries)
     pub fn get_metrics_by_name(&self, run_id: i64, name: &str) -> Result<Vec<Metric>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, run_id, name, epoch, step, value, recorded_at FROM metrics WHERE run_id = ?1 AND name = ?2 ORDER BY COALESCE(step, epoch, id)",
@@ -79,8 +79,9 @@ impl Database {
                 Ok(Metric {
                     id: row.get(0)?,
                     run_id: row.get(1)?,
-                    name: row.get(3)?,
-                    epoch: row.get(4)?,
+                    name: row.get(2)?,
+                    epoch: row.get(3)?,
+                    step: row.get(4)?,
                     value: row.get(5)?,
                     recorded_at: NaiveDateTime::parse_from_str(
                         &row.get::<_, String>(6)?,
@@ -98,7 +99,7 @@ impl Database {
     pub fn get_metric_names(&self, run_id: i64) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT DISTINCT name FORM metrics WHERE run_id = ?1 ORDER BY name")?;
+            .prepare("SELECT DISTINCT name FROM metrics WHERE run_id = ?1 ORDER BY name")?;
 
         let names = stmt
             .query_map(rusqlite::params![run_id], |row| row.get(0))?

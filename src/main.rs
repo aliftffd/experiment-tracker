@@ -1,3 +1,215 @@
-fn main() {
-    println!("Hello, world!");
+mod app;
+mod config;
+mod db;
+mod export;
+mod models;
+mod ui;
+mod utils;
+mod watcher;
+
+use std::io;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{backend::CrosstermBackend, Terminal};
+
+use crate::app::handler::{execute_action, handle_key_event};
+use crate::app::state::App;
+use crate::config::AppConfig;
+use crate::db::Database;
+
+#[derive(Parser, Debug)]
+#[command(name = "experiment-tracker")]
+#[command(about = "A TUI experiment tracker for ML workflows")]
+#[command(version)]
+struct Cli {
+    /// Path to config file
+    #[arg(short, long)]
+    config: Option<String>,
+
+    /// Watch directory (overrides config)
+    #[arg(short, long)]
+    watch: Option<Vec<String>>,
+
+    /// Database path (overrides config)
+    #[arg(short, long)]
+    db: Option<String>,
+
+    /// Seed database with sample data for testing
+    #[arg(long)]
+    seed: bool,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // Load config
+    let mut config = AppConfig::load(cli.config.as_deref().map(std::path::Path::new))?;
+
+    // CLI overrides
+    if let Some(watch_dirs) = cli.watch {
+        config.general.watch_dirs = watch_dirs;
+    }
+    if let Some(db_path) = cli.db {
+        config.general.db_path = db_path;
+    }
+
+    // Open database
+    let db_path = config.resolved_db_path();
+    let db = Database::open(&db_path)
+        .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
+
+    // Seed sample data if requested
+    if cli.seed {
+        seed_sample_data(&db)?;
+        eprintln!("Seeded sample data into {}", db_path.display());
+    }
+
+    // Create app
+    let mut app = App::new(config.clone(), db)?;
+
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Run event loop
+    let result = run_event_loop(&mut terminal, &mut app, &config);
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    result
+}
+
+fn run_event_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    config: &AppConfig,
+) -> Result<()> {
+    let tick_rate = Duration::from_millis(config.general.refresh_rate_ms);
+
+    loop {
+        // Render
+        terminal.draw(|frame| {
+            ui::render(app, frame);
+        })?;
+
+        // Handle events
+        if event::poll(tick_rate)? {
+            if let Event::Key(key) = event::read()? {
+                let action = handle_key_event(app, key);
+                execute_action(app, action);
+            }
+        }
+
+        // Check quit
+        if app.should_quit {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// Seed the database with sample experiment data for testing
+fn seed_sample_data(db: &Database) -> Result<()> {
+    // Run 1: A completed training run
+    let run1 = db.insert_run(
+        "tiny-trans-baseline-v1",
+        "./experiments/run_001/metrics.jsonl",
+    )?;
+    db.update_run_status(run1.id, &models::RunStatus::Completed)?;
+    db.add_tag(run1.id, "baseline")?;
+    db.add_tag(run1.id, "transformer")?;
+
+    for epoch in 0i64..50 {
+        let loss = 2.5 * (-0.05 * epoch as f64).exp() + 0.3 + 0.05 * (epoch as f64 * 0.1).sin();
+        let acc = 0.45 + 0.45 * (1.0 - (-0.08 * epoch as f64).exp());
+        let lr = 0.001 * (0.95_f64).powi(epoch as i32);
+
+        db.insert_metric(run1.id, "loss", Some(epoch), Some(epoch * 100), loss)?;
+        db.insert_metric(run1.id, "accuracy", Some(epoch), Some(epoch * 100), acc)?;
+        db.insert_metric(run1.id, "learning_rate", Some(epoch), Some(epoch * 100), lr)?;
+    }
+
+    // Run 2: A running experiment
+    let run2 = db.insert_run(
+        "tiny-trans-optuna-trial-7",
+        "./experiments/run_002/metrics.jsonl",
+    )?;
+    db.add_tag(run2.id, "optuna")?;
+    db.add_tag(run2.id, "hpo")?;
+
+    for epoch in 0i64..25 {
+        let loss = 3.0 * (-0.03 * epoch as f64).exp() + 0.5;
+        let acc = 0.30 + 0.35 * (1.0 - (-0.06 * epoch as f64).exp());
+
+        db.insert_metric(run2.id, "loss", Some(epoch), Some(epoch * 100), loss)?;
+        db.insert_metric(run2.id, "accuracy", Some(epoch), Some(epoch * 100), acc)?;
+    }
+
+    // Run 3: A failed run
+    let run3 = db.insert_run(
+        "bci-motor-imagery-v2",
+        "./experiments/run_003/metrics.jsonl",
+    )?;
+    db.update_run_status(run3.id, &models::RunStatus::Failed)?;
+    db.add_tag(run3.id, "bci")?;
+    db.update_run_notes(run3.id, "OOM at epoch 15 - reduce batch size")?;
+
+    for epoch in 0i64..15 {
+        let loss = 1.8 * (-0.02 * epoch as f64).exp() + 0.8;
+        let acc = 0.33 + 0.15 * (1.0 - (-0.04 * epoch as f64).exp());
+
+        db.insert_metric(run3.id, "loss", Some(epoch), Some(epoch * 100), loss)?;
+        db.insert_metric(run3.id, "accuracy", Some(epoch), Some(epoch * 100), acc)?;
+    }
+
+    // Run 4: Another completed run with different hyperparams
+    let run4 = db.insert_run(
+        "tiny-trans-large-dim",
+        "./experiments/run_004/metrics.jsonl",
+    )?;
+    db.update_run_status(run4.id, &models::RunStatus::Completed)?;
+    db.add_tag(run4.id, "transformer")?;
+    db.add_tag(run4.id, "large")?;
+
+    for epoch in 0i64..40 {
+        let loss = 2.0 * (-0.06 * epoch as f64).exp() + 0.25;
+        let acc = 0.50 + 0.42 * (1.0 - (-0.1 * epoch as f64).exp());
+
+        db.insert_metric(run4.id, "loss", Some(epoch), Some(epoch * 100), loss)?;
+        db.insert_metric(run4.id, "accuracy", Some(epoch), Some(epoch * 100), acc)?;
+    }
+
+    // Run 5: Stopped run
+    let run5 = db.insert_run("amc-vit-experiment", "./experiments/run_005/metrics.jsonl")?;
+    db.update_run_status(run5.id, &models::RunStatus::Stopped)?;
+    db.add_tag(run5.id, "vit")?;
+    db.update_run_notes(run5.id, "Stopped - accuracy plateaued")?;
+
+    for epoch in 0i64..20 {
+        let loss = 2.2 * (-0.04 * epoch as f64).exp() + 0.6;
+        let acc = 0.40 + 0.20 * (1.0 - (-0.05 * epoch as f64).exp());
+
+        db.insert_metric(run5.id, "loss", Some(epoch), Some(epoch * 100), loss)?;
+        db.insert_metric(run5.id, "accuracy", Some(epoch), Some(epoch * 100), acc)?;
+    }
+
+    Ok(())
 }

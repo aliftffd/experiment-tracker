@@ -5,5 +5,5 @@ pub mod tag;
 
 pub use hyperparams::HyperParam;
 pub use metric::Metric;
-pub use run::{Run, RusStatus};
+pub use run::{Run, RunStatus};
 pub use tag::Tag;

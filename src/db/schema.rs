@@ -16,7 +16,7 @@ impl Database {
         }
 
         let conn = Connection::open(path)
-            .with_context(|| format!("Failed to open database: {}", path_display()))?;
+            .with_context(|| format!("Failed to open database: {}", path.display()))?;
 
         // Enable WAL mode for better concurrent read performance
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;

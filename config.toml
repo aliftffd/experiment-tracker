@@ -1,0 +1,24 @@
+[general]
+# Directory where experiment logs are stored
+watch_dirs = ["./experiments", "~/ml-logs"]
+
+refresh_rate_ms = 1000 # How often to pool for changes
+
+# Database location
+db_path = "~/.local/share/experiment-tracker/tracker.db"
+
+[ui]
+theme = "dark" # a selection of theme
+
+show_sparklines = true # show sparklines in run list
+max_chart_points = 500 # max point to render in charts
+
+[parser]
+default_format = "auto"
+
+#JSON field mappings
+epoch_field = "epoch"
+step_field = "step"
+loss_field = "loss"
+accuracy_field = "accuracy"
+

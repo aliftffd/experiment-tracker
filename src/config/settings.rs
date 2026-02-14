@@ -6,7 +6,14 @@ use std::path::{Path, PathBuf};
 pub struct AppConfig {
     pub general: GeneralConfig,
     pub ui: UiConfig,
-    pub parser: PerserConfig,
+    pub parser: ParserConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneralConfig {
+    pub watch_dirs: Vec<String>,
+    pub refresh_rate_ms: u64,
+    pub db_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,12 +68,18 @@ impl AppConfig {
             let content = std::fs::read_to_string(&config_path)
                 .with_context(|| format!("Failed to read config : {}", config_path.display()))?;
             let config: AppConfig =
-                toml::from_str(&contents).with_context(|| "Failed to parse config")?;
+                toml::from_str(&content).with_context(|| "Failed to parse config")?;
             Ok(config)
         } else {
             Ok(AppConfig::default())
         }
     }
+
+    /// Resolve the database path (expand ~)
+    pub fn resolved_db_path(&self) -> PathBuf {
+        expand_tilde(&self.general.db_path)
+    }
+
     /// Resolve watch directories (expand ~)
     pub fn resolved_watch_dirs(&self) -> Vec<PathBuf> {
         self.general

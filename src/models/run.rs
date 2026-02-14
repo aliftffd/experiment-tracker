@@ -48,7 +48,7 @@ pub struct Run {
     pub id: i64,
     pub name: String,
     pub status: RunStatus,
-    pub log_status: String,
+    pub log_path: String,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
     pub notes: String,

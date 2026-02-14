@@ -26,27 +26,25 @@ impl Database {
     }
 
     /// get all tags for a run
-    pub fn get_tag_for_run(&self, run_id: i64) -> Result<Vec<Tag>> {
+    pub fn get_tags_for_run(&self, run_id: i64) -> Result<Vec<Tag>> {
         let mut stmt = self
             .conn
             .prepare("SELECT id, run_id, tag FROM tags WHERE run_id = ?1 ORDER BY tag")?;
 
         let tags = stmt
-            .query_map(
-                rusqlite::params![run_id] | row | {
-                    Ok(Tag {
-                        id: row.get(0)?,
-                        run_id: row.get(1)?,
-                        tag: row.get(2)?,
-                    })
-                },
-            )?
+            .query_map(rusqlite::params![run_id], |row| {
+                Ok(Tag {
+                    id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    tag: row.get(2)?,
+                })
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(tags)
     }
 
-    /// Get all unique tags accross all runs
+    /// Get all unique tags across all runs
     pub fn get_all_tags(&self) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
@@ -59,14 +57,16 @@ impl Database {
         Ok(tags)
     }
 
-    /// find runs with a speccifi tags
+    /// find runs with a specific tag
     pub fn get_runs_by_tag(&self, tag: &str) -> Result<Vec<i64>> {
         let mut stmt = self
             .conn
             .prepare("SELECT run_id FROM tags WHERE tag = ?1")?;
 
         let ids = stmt
-            .query_map(rustqlite::params![run_id], |row| row.get(0))?
+            .query_map(rusqlite::params![tag], |row| row.get(0))?
             .collect::<std::result::Result<Vec<i64>, _>>()?;
+
+        Ok(ids)
     }
 }

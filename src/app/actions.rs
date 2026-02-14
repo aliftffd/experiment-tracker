@@ -12,7 +12,7 @@ pub enum Action {
     Back,
 
     // Views
-    GoToDashBoards,
+    GoToDashboard,
     GoToRunDetail(i64),
     GoToCompare,
 
@@ -28,7 +28,6 @@ pub enum Action {
     EnterSearchMode,
     ExitSearchMode,
     SearchInput(char),
-    SearchBackspace,
     SearchBackspace,
     SearchClear,
 
