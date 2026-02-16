@@ -2,11 +2,17 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::platform;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub general: GeneralConfig,
     pub ui: UiConfig,
     pub parser: ParserConfig,
+    #[serde(default)]
+    pub gpu: Option<GpuConfig>,
+    #[serde(default)]
+    pub docker: Option<DockerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +26,7 @@ pub struct GeneralConfig {
 pub struct UiConfig {
     pub theme: String,
     pub show_sparklines: bool,
+    pub show_gpu_bar: bool,
     pub max_chart_points: usize,
 }
 
@@ -30,6 +37,22 @@ pub struct ParserConfig {
     pub step_field: String,
     pub loss_field: String,
     pub accuracy_field: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuConfig {
+    pub poll_interval_secs: u64,
+    pub temp_warning: u32,
+    pub temp_critical: u32,
+    pub vram_warning: u32,
+    pub vram_critical: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockerConfig {
+    pub default_image: String,
+    pub gpu: bool,
+    pub container_workdir: String,
 }
 
 impl Default for AppConfig {
@@ -43,6 +66,7 @@ impl Default for AppConfig {
             ui: UiConfig {
                 theme: "dark".into(),
                 show_sparklines: true,
+                show_gpu_bar: true,
                 max_chart_points: 500,
             },
             parser: ParserConfig {
@@ -52,6 +76,20 @@ impl Default for AppConfig {
                 loss_field: "loss".into(),
                 accuracy_field: "accuracy".into(),
             },
+
+            gpu: Some(GpuConfig {
+                poll_interval_secs: 2,
+                temp_warning: 80,
+                temp_critical: 90,
+                vram_warning: 80,
+                vram_critical: 95,
+            }),
+            docker: Some(DockerConfig {
+                default_image: "thesis-training:latest".into(),
+                gpu: true,
+                container_workdir: "/workspace/output".into(),
+            }),
+
         }
     }
 }

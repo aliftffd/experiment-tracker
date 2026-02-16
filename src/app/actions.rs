@@ -1,3 +1,4 @@
+/// All possible user-triggered actions in the app
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     // Navigation
@@ -15,14 +16,31 @@ pub enum Action {
     GoToDashboard,
     GoToRunDetail(i64),
     GoToCompare,
+    GoToGpuMonitor,
 
-    // Run Operations
+    // Run operations
     DeleteRun,
+    ConfirmDelete,
+    CancelDelete,
     ToggleRunStatus,
 
-    // Tag Operations
-    AddTag(String),
-    RemoveTag(String),
+    // Tag operations
+    OpenTagList,
+    OpenTagInput,
+    ConfirmTagInput,
+    RemoveSelectedTag,
+
+    // Notes
+    OpenNotesEditor,
+    ConfirmNotesInput,
+
+    // Compare
+    ToggleCompareSelection,
+    CycleCompareMetric,
+
+    // Docker
+    OpenRunDialog,
+    ConfirmRunDialog,
 
     // Search
     EnterSearchMode,
@@ -30,6 +48,12 @@ pub enum Action {
     SearchInput(char),
     SearchBackspace,
     SearchClear,
+
+    // Shared input (used by tag input, notes, run dialog)
+    InputChar(char),
+    InputBackspace,
+    InputConfirm,
+    InputCancel,
 
     // Chart
     CycleMetric,
@@ -39,8 +63,12 @@ pub enum Action {
     ExportCsv,
     ExportLatex,
 
+    // Container
+    StopContainer,
+
     // Misc
     Refresh,
     ToggleHelp,
     None,
 }
+

@@ -138,4 +138,24 @@ impl Database {
             None => Ok(None),
         }
     }
+
+    /// Get all hyperparameters for a run
+    pub fn get_hyperparams_for_run(&self, run_id: i64) -> Result<Vec<crate::models::HyperParam>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, key, value FROM hyperparams WHERE run_id = ?1 ORDER BY key",
+        )?;
+
+        let params = stmt
+            .query_map(rusqlite::params![run_id], |row| {
+                Ok(crate::models::HyperParam {
+                    id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    key: row.get(2)?,
+                    value: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(params)
+    }
 }

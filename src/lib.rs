@@ -1,8 +1,11 @@
 pub mod app;
 pub mod config;
 pub mod db;
+pub mod docker;
 pub mod export;
+pub mod gpu;
 pub mod models;
+pub mod platform;
 pub mod ui;
 pub mod utils;
 pub mod watcher;

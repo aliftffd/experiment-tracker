@@ -1,8 +1,11 @@
 mod app;
 mod config;
 mod db;
+mod docker;
 mod export;
+mod gpu;
 mod models;
+mod platform;
 mod ui;
 mod utils;
 mod watcher;
@@ -23,6 +26,7 @@ use crate::app::handler::{execute_action, handle_key_event};
 use crate::app::state::App;
 use crate::config::AppConfig;
 use crate::db::Database;
+use crate::watcher::directory::{DirectoryWatcher, WatchEvent};
 
 #[derive(Parser, Debug)]
 #[command(name = "experiment-tracker")]
@@ -44,6 +48,10 @@ struct Cli {
     /// Seed database with sample data for testing
     #[arg(long)]
     seed: bool,
+
+    /// Skip initial file scan on startup
+    #[arg(long)]
+    no_scan: bool,
 }
 
 fn main() -> Result<()> {
@@ -74,6 +82,30 @@ fn main() -> Result<()> {
     // Create app
     let mut app = App::new(config.clone(), db)?;
 
+    // Initial scan: import existing log files
+    if !cli.no_scan {
+        match app.import_existing_files() {
+            Ok(count) => {
+                if count > 0 {
+                    app.set_status(format!("Imported {} existing log files", count));
+                }
+            }
+            Err(e) => {
+                app.set_status(format!("Scan warning: {}", e));
+            }
+        }
+    }
+
+    // Start the file watcher
+    let watch_dirs = config.resolved_watch_dirs();
+    let watcher = match DirectoryWatcher::new(&watch_dirs) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            app.set_status(format!("Watcher error: {} — running without live updates", e));
+            None
+        }
+    };
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -82,7 +114,7 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run event loop
-    let result = run_event_loop(&mut terminal, &mut app, &config);
+    let result = run_event_loop(&mut terminal, &mut app, &config, watcher.as_ref());
 
     // Restore terminal
     disable_raw_mode()?;
@@ -100,6 +132,7 @@ fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     config: &AppConfig,
+    watcher: Option<&DirectoryWatcher>,
 ) -> Result<()> {
     let tick_rate = Duration::from_millis(config.general.refresh_rate_ms);
 
@@ -109,11 +142,43 @@ fn run_event_loop(
             ui::render(app, frame);
         })?;
 
-        // Handle events
+        // Handle keyboard events
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
                 let action = handle_key_event(app, key);
                 execute_action(app, action);
+            }
+        }
+
+        // Handle file watcher events
+        if let Some(w) = watcher {
+            for event in w.drain_events() {
+                match event {
+                    WatchEvent::FileChanged(path) => {
+                        if let Err(e) = app.import_log_file(&path) {
+                            app.set_status(format!(
+                                "Import error: {} — {}",
+                                path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("unknown"),
+                                e
+                            ));
+                        }
+                    }
+                    WatchEvent::FileRemoved(path) => {
+                        app.set_status(format!(
+                            "File removed: {}",
+                            path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                        ));
+                        // We don't auto-delete runs when files are removed
+                        // User might have just moved the file
+                    }
+                    WatchEvent::Error(msg) => {
+                        app.set_status(format!("Watcher: {}", msg));
+                    }
+                }
             }
         }
 

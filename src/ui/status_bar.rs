@@ -26,20 +26,47 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
 
-        InputMode::TagInput => Span::styled(
+        InputMode::TagInput | InputMode::TagList => Span::styled(
             " TAG ",
             Style::default()
                 .bg(Color::Magenta)
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ),
+        InputMode::NotesInput => Span::styled(
+            " NOTES ",
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        InputMode::DeleteConfirm => Span::styled(
+            " DELETE? ",
+            Style::default()
+                .bg(Color::Red)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        InputMode::RunDialog => Span::styled(
+            " RUN ",
+            Style::default()
+                .bg(Color::Green)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
     };
 
     let keyhints = match (&app.current_view, &app.input_mode) {
         (_, InputMode::Search) => " Esc:exit  Enter:confirm ",
-        (View::Dashboard, _) => " j/k:navigate  Enter:open  /:search  d:delete  ?:help  q:quit ",
-        (View::RunDetail, _) => " Esc:back  Tab:metric  s:status  t:tag  m:export  ?:help ",
-        (View::Compare, _) => " Esc:back  j/k:navigate  ?:help ",
+        (_, InputMode::DeleteConfirm) => " y:confirm  n/Esc:cancel ",
+        (_, InputMode::TagList) => " a:add  d:remove  j/k:nav  Esc:close ",
+        (_, InputMode::TagInput) => " Enter:save  Esc:cancel ",
+        (_, InputMode::NotesInput) => " Enter:save  Esc:cancel ",
+        (_, InputMode::RunDialog) => " Enter:confirm  Esc:cancel ",
+        (View::Dashboard, _) => " j/k:nav  Enter:open  Space:compare  /:search  d:delete  g:gpu  ?:help  q:quit ",
+        (View::RunDetail, _) => " Esc:back  Tab:metric  s:status  t:tags  n:notes  m:md  e:csv  K:stop  ?:help ",
+        (View::Compare, _) => " Esc:back  Tab:cycle metric  g:gpu  ?:help ",
+        (View::GpuMonitor, _) => " Esc/g:back  ?:help ",
         (View::Help, _) => " ?/Esc:close help ",
     };
 

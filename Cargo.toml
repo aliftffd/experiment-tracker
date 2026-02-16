@@ -37,3 +37,6 @@ similar = "2"
 [profile.release]
 opt-level = 3
 lto = true
+
+[dev-dependencies]
+tempfile = "3"
