@@ -1,4 +1,3 @@
-/// All possible user-triggered actions in the app
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     // Navigation
@@ -17,6 +16,9 @@ pub enum Action {
     GoToRunDetail(i64),
     GoToCompare,
     GoToGpuMonitor,
+
+    // Run detail sub-views
+    CycleDetailSubView,
 
     // Run operations
     DeleteRun,
@@ -41,6 +43,9 @@ pub enum Action {
     // Docker
     OpenRunDialog,
     ConfirmRunDialog,
+    RunDialogNextField,
+    RunDialogToggleGpu,
+    StopContainer,
 
     // Search
     EnterSearchMode,
@@ -49,7 +54,7 @@ pub enum Action {
     SearchBackspace,
     SearchClear,
 
-    // Shared input (used by tag input, notes, run dialog)
+    // Shared input
     InputChar(char),
     InputBackspace,
     InputConfirm,
@@ -58,13 +63,10 @@ pub enum Action {
     // Chart
     CycleMetric,
 
-    // Export (Day 4)
+    // Export
     ExportMarkdown,
     ExportCsv,
     ExportLatex,
-
-    // Container
-    StopContainer,
 
     // Misc
     Refresh,

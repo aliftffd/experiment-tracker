@@ -1,24 +1,51 @@
+# Experiment Tracker Configuration
+
 [general]
-# Directory where experiment logs are stored
-watch_dirs = ["./experiments", "~/ml-logs"]
+# Directories to watch for experiment logs
+watch_dirs = ["./experiments"]
 
-refresh_rate_ms = 1000 # How often to pool for changes
+# UI refresh rate (milliseconds)
+refresh_rate_ms = 250
 
-# Database location
-db_path = "~/.local/share/experiment-tracker/tracker.db"
+# Database location (auto-detected if not set)
+# Linux:   ~/.local/share/experiment-tracker/tracker.db
+# Windows: %LOCALAPPDATA%\experiment-tracker\tracker.db
+# db_path = "custom/path/tracker.db"
 
 [ui]
-theme = "dark" # a selection of theme
-
-show_sparklines = true # show sparklines in run list
-max_chart_points = 500 # max point to render in charts
+theme = "dark"
+show_sparklines = true
+show_gpu_bar = true
+max_chart_points = 500
 
 [parser]
+# Log format: "jsonl", "csv", or "auto" (detect by extension/content)
 default_format = "auto"
 
-#JSON field mappings
+# JSON field names for epoch and step
 epoch_field = "epoch"
 step_field = "step"
 loss_field = "loss"
 accuracy_field = "accuracy"
 
+[gpu]
+# GPU polling interval in seconds
+poll_interval_secs = 2
+
+# Temperature thresholds (Celsius)
+temp_warning = 80
+temp_critical = 90
+
+# VRAM usage thresholds (percentage)
+vram_warning = 80
+vram_critical = 95
+
+[docker]
+# Default Docker image for training
+default_image = "thesis-training:latest"
+
+# Enable GPU passthrough
+gpu = true
+
+# Container working directory (where metrics.jsonl is written)
+container_workdir = "/workspace/output"

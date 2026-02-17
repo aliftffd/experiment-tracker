@@ -182,6 +182,9 @@ fn run_event_loop(
             }
         }
 
+        // Poll GPU stats
+        app.poll_gpu_if_needed();
+
         // Check quit
         if app.should_quit {
             break;
@@ -193,6 +196,13 @@ fn run_event_loop(
 
 /// Seed the database with sample experiment data for testing
 fn seed_sample_data(db: &Database) -> Result<()> {
+    // Skip if already seeded
+    let existing = db.get_all_runs().unwrap_or_default();
+    if !existing.is_empty() {
+        eprintln!("Database already contains runs, skipping seed.");
+        return Ok(());
+    }
+
     // Run 1: A completed training run
     let run1 = db.insert_run(
         "tiny-trans-baseline-v1",

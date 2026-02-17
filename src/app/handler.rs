@@ -3,23 +3,18 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::actions::Action;
 use crate::app::state::{App, InputMode, View};
 
-/// Map a key event to an action based on current state
 pub fn handle_key_event(app: &App, key: KeyEvent) -> Action {
-    // Global: Ctrl+C always quits
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return Action::Quit;
     }
 
-    // Route based on input mode (popups take priority)
     match app.input_mode {
         InputMode::Search => handle_search_keys(key),
-        InputMode::TagInput | InputMode::NotesInput | InputMode::RunDialog => {
-            handle_input_keys(key)
-        }
+        InputMode::TagInput | InputMode::NotesInput => handle_input_keys(key),
         InputMode::TagList => handle_tag_list_keys(key),
         InputMode::DeleteConfirm => handle_delete_confirm_keys(key),
+        InputMode::RunDialog => handle_run_dialog_keys(app, key),
         InputMode::Normal => {
-            // q only quits in Normal mode
             if key.code == KeyCode::Char('q') {
                 return Action::Quit;
             }
@@ -58,7 +53,7 @@ fn handle_dashboard_keys(key: KeyEvent) -> Action {
 fn handle_run_detail_keys(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc | KeyCode::Char('h') | KeyCode::Backspace => Action::Back,
-        KeyCode::Tab => Action::CycleMetric,
+        KeyCode::Tab => Action::CycleDetailSubView,
         KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
         KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
 
@@ -72,6 +67,7 @@ fn handle_run_detail_keys(key: KeyEvent) -> Action {
 
         KeyCode::Char('m') => Action::ExportMarkdown,
         KeyCode::Char('e') => Action::ExportCsv,
+        KeyCode::Char('x') => Action::ExportLatex,
 
         _ => Action::None,
     }
@@ -83,6 +79,11 @@ fn handle_compare_keys(key: KeyEvent) -> Action {
         KeyCode::Tab => Action::CycleCompareMetric,
         KeyCode::Char('g') => Action::GoToGpuMonitor,
         KeyCode::Char('?') => Action::ToggleHelp,
+
+        KeyCode::Char('m') => Action::ExportMarkdown,
+        KeyCode::Char('e') => Action::ExportCsv,
+        KeyCode::Char('x') => Action::ExportLatex,
+
         _ => Action::None,
     }
 }
@@ -141,11 +142,29 @@ fn handle_delete_confirm_keys(key: KeyEvent) -> Action {
     }
 }
 
-/// Execute an action, mutating app state
+fn handle_run_dialog_keys(app: &App, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::InputCancel,
+        KeyCode::Enter => Action::ConfirmRunDialog,
+        KeyCode::Tab => Action::RunDialogNextField,
+        KeyCode::Char(' ') => {
+            // Space toggles GPU when on the GPU field
+            if let Some(dialog) = &app.run_dialog {
+                if dialog.active_field == 3 {
+                    return Action::RunDialogToggleGpu;
+                }
+            }
+            Action::InputChar(' ')
+        }
+        KeyCode::Backspace => Action::InputBackspace,
+        KeyCode::Char(c) => Action::InputChar(c),
+        _ => Action::None,
+    }
+}
+
 pub fn execute_action(app: &mut App, action: Action) {
     match action {
         Action::Quit => {
-            // Stop all Docker containers before quitting
             if let Some(docker) = &mut app.docker {
                 docker.stop_all();
             }
@@ -209,7 +228,6 @@ pub fn execute_action(app: &mut App, action: Action) {
         Action::NextTab => {
             app.selected_tab = (app.selected_tab + 1) % app.tab_titles.len();
         }
-
         Action::PrevTab => {
             app.selected_tab = if app.selected_tab == 0 {
                 app.tab_titles.len() - 1
@@ -232,40 +250,45 @@ pub fn execute_action(app: &mut App, action: Action) {
             }
         }
 
-        // ─── Search ──────────────────────────────────
+        Action::CycleDetailSubView => {
+            app.cycle_detail_sub_view();
+            let label = match app.detail_sub_view {
+                crate::app::state::DetailSubView::Chart => "Chart",
+                crate::app::state::DetailSubView::Hyperparams => "Hyperparameters",
+                crate::app::state::DetailSubView::Logs => "Container Logs",
+            };
+            app.set_status(format!("View: {}", label));
+        }
+
+        // ─── Search ──────────────────────────
         Action::EnterSearchMode => {
             app.input_mode = InputMode::Search;
             app.set_status("Search: type to filter");
         }
-
         Action::ExitSearchMode => {
             app.input_mode = InputMode::Normal;
             app.set_status("Ready");
         }
-
         Action::SearchInput(c) => {
             let mut query = app.search_query.clone();
             query.push(c);
             app.update_search(query);
         }
-
         Action::SearchBackspace => {
             let mut query = app.search_query.clone();
             query.pop();
             app.update_search(query);
         }
-
         Action::SearchClear => {
             app.update_search(String::new());
         }
 
-        // ─── Delete ──────────────────────────────────
+        // ─── Delete ──────────────────────────
         Action::DeleteRun => {
             if app.selected_run().is_some() {
                 app.input_mode = InputMode::DeleteConfirm;
             }
         }
-
         Action::ConfirmDelete => {
             if let Some(run) = app.selected_run().cloned() {
                 if app.db.delete_run(run.id).is_ok() {
@@ -276,23 +299,20 @@ pub fn execute_action(app: &mut App, action: Action) {
             }
             app.input_mode = InputMode::Normal;
         }
-
         Action::CancelDelete => {
             app.input_mode = InputMode::Normal;
             app.set_status("Delete cancelled");
         }
 
-        // ─── Tags ────────────────────────────────────
+        // ─── Tags ────────────────────────────
         Action::OpenTagList => {
             app.input_mode = InputMode::TagList;
             app.tag_list_selected = 0;
         }
-
         Action::OpenTagInput => {
             app.input_buffer.clear();
             app.input_mode = InputMode::TagInput;
         }
-
         Action::RemoveSelectedTag => {
             if let Some(run) = app.current_run.clone() {
                 if let Some(tag) = app.current_tags.get(app.tag_list_selected) {
@@ -310,21 +330,37 @@ pub fn execute_action(app: &mut App, action: Action) {
             }
         }
 
-        // ─── Notes ───────────────────────────────────
+        // ─── Notes ───────────────────────────
         Action::OpenNotesEditor => {
             app.input_buffer.clear();
             app.input_mode = InputMode::NotesInput;
         }
 
-        // ─── Shared Input ────────────────────────────
-        Action::InputChar(c) => {
-            app.input_buffer.push(c);
-        }
-
-        Action::InputBackspace => {
-            app.input_buffer.pop();
-        }
-
+        // ─── Shared Input ────────────────────
+        Action::InputChar(c) => match app.input_mode {
+            InputMode::RunDialog => {
+                if let Some(dialog) = &mut app.run_dialog {
+                    if let Some(field) = dialog.active_value_mut() {
+                        field.push(c);
+                    }
+                }
+            }
+            _ => {
+                app.input_buffer.push(c);
+            }
+        },
+        Action::InputBackspace => match app.input_mode {
+            InputMode::RunDialog => {
+                if let Some(dialog) = &mut app.run_dialog {
+                    if let Some(field) = dialog.active_value_mut() {
+                        field.pop();
+                    }
+                }
+            }
+            _ => {
+                app.input_buffer.pop();
+            }
+        },
         Action::InputConfirm => {
             let buffer = app.input_buffer.clone();
             match app.input_mode {
@@ -358,24 +394,60 @@ pub fn execute_action(app: &mut App, action: Action) {
                 }
             }
         }
-
         Action::InputCancel => {
             app.input_buffer.clear();
             match app.input_mode {
                 InputMode::TagInput => app.input_mode = InputMode::TagList,
+                InputMode::RunDialog => {
+                    app.run_dialog = None;
+                    app.input_mode = InputMode::Normal;
+                    app.set_status("Run cancelled");
+                }
                 _ => app.input_mode = InputMode::Normal,
             }
-            app.set_status("Cancelled");
         }
 
-        // ─── Compare ────────────────────────────────
+        // ─── Run Dialog ──────────────────────
+        Action::OpenRunDialog => {
+            if app.docker.is_none() {
+                app.set_status("Docker not available. Install Docker to run experiments.");
+            } else {
+                app.open_run_dialog();
+            }
+        }
+        Action::RunDialogNextField => {
+            if let Some(dialog) = &mut app.run_dialog {
+                dialog.next_field();
+            }
+        }
+        Action::RunDialogToggleGpu => {
+            if let Some(dialog) = &mut app.run_dialog {
+                dialog.toggle_gpu();
+            }
+        }
+        Action::ConfirmRunDialog => {
+            match app.execute_docker_run() {
+                Ok(_) => {} // status already set inside execute_docker_run
+                Err(e) => {
+                    // Show error in the dialog instead of closing it
+                    if let Some(dialog) = &mut app.run_dialog {
+                        dialog.error_message = e.to_string();
+                    } else {
+                        app.set_status(format!("Run failed: {}", e));
+                        app.input_mode = InputMode::Normal;
+                    }
+                }
+            }
+        }
+
+        // ─── Compare ────────────────────────
         Action::ToggleCompareSelection => {
             if let Some(run) = app.selected_run().cloned() {
                 app.toggle_compare(run.id);
             }
         }
 
-        // ─── Status Toggle ──────────────────────────
+        // ─── Status Toggle ──────────────────
         Action::ToggleRunStatus => {
             if let Some(run) = app.current_run.clone() {
                 use crate::models::RunStatus;
@@ -387,21 +459,20 @@ pub fn execute_action(app: &mut App, action: Action) {
                 };
                 if app.db.update_run_status(run.id, &new_status).is_ok() {
                     let _ = app.load_run_detail(run.id);
-                    app.set_status(format!("Status -> {}", new_status));
+                    app.set_status(format!("Status → {}", new_status));
                 }
             }
         }
 
-        // ─── Docker ─────────────────────────────────
+        // ─── Docker ─────────────────────────
         Action::StopContainer => {
             if let Some(run) = app.current_run.clone() {
                 if let Some(docker) = &mut app.docker {
                     if docker.is_running(run.id) {
                         if docker.stop_container(run.id).is_ok() {
-                            let _ = app.db.update_run_status(
-                                run.id,
-                                &crate::models::RunStatus::Stopped,
-                            );
+                            let _ = app
+                                .db
+                                .update_run_status(run.id, &crate::models::RunStatus::Stopped);
                             let _ = app.load_run_detail(run.id);
                             app.set_status("Container stopped");
                         }
@@ -412,8 +483,44 @@ pub fn execute_action(app: &mut App, action: Action) {
             }
         }
 
+        // ─── Export ─────────────────────────
+        Action::ExportMarkdown => {
+            let result = match app.current_view {
+                View::Compare => app.export_compare_markdown(),
+                _ => app.export_current_run_markdown(),
+            };
+            match result {
+                Ok(path) => app.set_status(format!("Exported: {}", path)),
+                Err(e) => app.set_status(format!("Export error: {}", e)),
+            }
+        }
+        Action::ExportCsv => {
+            let result = match app.current_view {
+                View::Compare => app.export_compare_csv(),
+                _ => app.export_current_run_csv(),
+            };
+            match result {
+                Ok(path) => app.set_status(format!("Exported: {}", path)),
+                Err(e) => app.set_status(format!("Export error: {}", e)),
+            }
+        }
+        Action::ExportLatex => {
+            let result = match app.current_view {
+                View::Compare => app.export_compare_latex(),
+                _ => app.export_current_run_latex(),
+            };
+            match result {
+                Ok(path) => app.set_status(format!("Exported: {}", path)),
+                Err(e) => app.set_status(format!("Export error: {}", e)),
+            }
+        }
+
         Action::Refresh => {
             if app.refresh_runs().is_ok() {
+                // Also refresh detail if we're viewing one
+                if let Some(run) = app.current_run.clone() {
+                    let _ = app.load_run_detail(run.id);
+                }
                 app.set_status("Refreshed");
             }
         }
@@ -430,3 +537,4 @@ pub fn execute_action(app: &mut App, action: Action) {
         _ => {}
     }
 }
+

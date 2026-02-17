@@ -5,15 +5,14 @@ pub mod gpu_bar;
 pub mod gpu_screen;
 pub mod popups;
 pub mod run_detail;
+pub mod run_dialog;
 pub mod status_bar;
 
 use ratatui::Frame;
 
 use crate::app::state::{App, InputMode, View};
 
-/// Main render function — routes to the appropriate view, then overlays popups
 pub fn render(app: &mut App, frame: &mut Frame) {
-    // Render the base view
     match app.current_view {
         View::Dashboard => dashboard::render(app, frame),
         View::RunDetail => run_detail::render(app, frame),
@@ -22,7 +21,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         View::Help => render_help(app, frame),
     }
 
-    // Overlay popups on top of any view
     render_popup_overlay(app, frame);
 }
 
@@ -55,6 +53,11 @@ fn render_popup_overlay(app: &App, frame: &mut Frame) {
                 .unwrap_or("");
             popups::render_notes_editor(current_notes, &app.input_buffer, frame, area);
         }
+        InputMode::RunDialog => {
+            if let Some(dialog) = &app.run_dialog {
+                run_dialog::render(dialog, frame, area);
+            }
+        }
         _ => {}
     }
 }
@@ -63,7 +66,7 @@ fn render_help(app: &mut App, frame: &mut Frame) {
     use ratatui::layout::{Constraint, Layout};
 
     let chunks = Layout::vertical([
-        Constraint::Length(1), // GPU bar
+        Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
@@ -73,40 +76,48 @@ fn render_help(app: &mut App, frame: &mut Frame) {
 
     let help_text = vec![
         "",
-        "  ╔══════════════════════════════════════════════╗",
-        "  ║        Experiment Tracker — Help              ║",
-        "  ╠══════════════════════════════════════════════╣",
-        "  ║                                              ║",
-        "  ║  Dashboard                                   ║",
-        "  ║  ─────────                                   ║",
-        "  ║  j/k ↑/↓    Navigate runs                    ║",
-        "  ║  Enter/l     Open run detail                  ║",
-        "  ║  Space       Mark/unmark for comparison       ║",
-        "  ║  /           Search runs                      ║",
-        "  ║  d           Delete run (with confirmation)   ║",
-        "  ║  c           Compare marked runs              ║",
-        "  ║  g           GPU monitor                      ║",
-        "  ║  R           Run new experiment (Docker)      ║",
-        "  ║  r           Refresh                          ║",
-        "  ║                                              ║",
-        "  ║  Run Detail                                  ║",
-        "  ║  ──────────                                  ║",
-        "  ║  Esc/h       Back to dashboard                ║",
-        "  ║  Tab         Cycle metrics                    ║",
-        "  ║  s           Toggle status                    ║",
-        "  ║  t           Manage tags                      ║",
-        "  ║  n           Edit notes                       ║",
-        "  ║  K           Stop Docker container            ║",
-        "  ║  m           Export markdown                   ║",
-        "  ║  e           Export CSV                        ║",
-        "  ║                                              ║",
-        "  ║  General                                     ║",
-        "  ║  ───────                                     ║",
-        "  ║  ?           Toggle help                      ║",
-        "  ║  q           Quit                             ║",
-        "  ║  Ctrl+C      Force quit                       ║",
-        "  ║                                              ║",
-        "  ╚══════════════════════════════════════════════╝",
+        "  ╔══════════════════════════════════════════════════╗",
+        "  ║         Experiment Tracker — Help                 ║",
+        "  ╠══════════════════════════════════════════════════╣",
+        "  ║                                                  ║",
+        "  ║  Dashboard                                       ║",
+        "  ║  ─────────                                       ║",
+        "  ║  j/k ↑/↓    Navigate runs                        ║",
+        "  ║  Enter/l     Open run detail                      ║",
+        "  ║  Space       Mark/unmark for comparison           ║",
+        "  ║  /           Search runs                          ║",
+        "  ║  d           Delete run (with confirmation)       ║",
+        "  ║  c           Compare marked runs                  ║",
+        "  ║  g           GPU monitor                          ║",
+        "  ║  R           Run experiment (Docker)              ║",
+        "  ║  r           Refresh                              ║",
+        "  ║                                                  ║",
+        "  ║  Run Detail                                      ║",
+        "  ║  ──────────                                      ║",
+        "  ║  Esc/h       Back to dashboard                    ║",
+        "  ║  Tab         Cycle sub-view (Chart/Params/Logs)   ║",
+        "  ║  j/k         Cycle metrics (in chart view)        ║",
+        "  ║  s           Toggle run status                    ║",
+        "  ║  t           Manage tags                          ║",
+        "  ║  n           Edit notes                           ║",
+        "  ║  K           Stop Docker container                ║",
+        "  ║  m           Export as Markdown                    ║",
+        "  ║  e           Export as CSV                         ║",
+        "  ║  x           Export as LaTeX                       ║",
+        "  ║                                                  ║",
+        "  ║  Compare View                                    ║",
+        "  ║  ────────────                                    ║",
+        "  ║  Tab         Cycle metrics                        ║",
+        "  ║  m/e/x       Export comparison (md/csv/tex)       ║",
+        "  ║  Esc         Back                                 ║",
+        "  ║                                                  ║",
+        "  ║  General                                         ║",
+        "  ║  ───────                                         ║",
+        "  ║  ?           Toggle help                          ║",
+        "  ║  q           Quit                                 ║",
+        "  ║  Ctrl+C      Force quit                           ║",
+        "  ║                                                  ║",
+        "  ╚══════════════════════════════════════════════════╝",
     ];
 
     let text = help_text.join("\n");
@@ -116,4 +127,3 @@ fn render_help(app: &mut App, frame: &mut Frame) {
     frame.render_widget(paragraph, chunks[1]);
     status_bar::render(app, frame, chunks[2]);
 }
-

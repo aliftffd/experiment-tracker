@@ -62,7 +62,7 @@ fn render_compare_chart(app: &App, frame: &mut Frame, area: ratatui::layout::Rec
 
         // We need the data to live long enough for the Chart widget
         // So we collect names for the legend
-        let _name = format!("{} ({})", run_name.name, i + 1);
+        let _name = format!("{} ({})", run_name, i + 1);
     }
 
     // Calculate global bounds across all runs
@@ -106,7 +106,7 @@ fn render_compare_chart(app: &App, frame: &mut Frame, area: ratatui::layout::Rec
         let run_name = &app.compare_data[i].0;
         datasets.push(
             Dataset::default()
-                .name(run_name.name.as_str())
+                .name(run_name.as_str())
                 .marker(symbols::Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(Style::default().fg(chart_color(i)))
@@ -180,7 +180,7 @@ fn render_compare_table(app: &App, frame: &mut Frame, area: ratatui::layout::Rec
     }
 
     // Build header: "Metric | Run A | Run B | ..."
-    let run_names: Vec<&str> = app.compare_data.iter().map(|(n, _)| n.name.as_str()).collect();
+    let run_names: Vec<&str> = app.compare_data.iter().map(|(n, _)| n.as_str()).collect();
     let mut header_vec: Vec<&str> = vec!["Metric"];
     for name in &run_names {
         header_vec.push(name);

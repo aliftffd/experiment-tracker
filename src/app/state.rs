@@ -1,12 +1,14 @@
 use crate::config::AppConfig;
 use crate::db::Database;
-use crate::docker::{ContainerState, DockerInfo, DockerManager};
+use crate::docker::DockerManager;
+use crate::export;
 use crate::gpu::{GpuHistory, GpuMonitor, GpuProcess, GpuStats};
 use crate::models::{HyperParam, Metric, Run, RunStatus};
 use crate::watcher::parser::parse_log_file;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Which view/screen is active
 #[derive(Debug, Clone, PartialEq)]
@@ -18,7 +20,7 @@ pub enum View {
     Help,
 }
 
-/// Input mode for search/text input and popup routing
+/// Input mode for text input
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputMode {
     Normal,
@@ -28,6 +30,70 @@ pub enum InputMode {
     NotesInput,
     DeleteConfirm,
     RunDialog,
+}
+
+/// State for the Docker run dialog
+#[derive(Debug, Clone)]
+pub struct RunDialogState {
+    pub image: String,
+    pub command: String,
+    pub output_dir: String,
+    pub use_gpu: bool,
+    pub active_field: usize, // 0=image, 1=command, 2=output_dir, 3=gpu toggle
+    pub error_message: String,
+}
+
+impl RunDialogState {
+    pub fn new(config: &AppConfig, next_run_number: usize) -> Self {
+        let image = config
+            .docker
+            .as_ref()
+            .map(|d| d.default_image.clone())
+            .unwrap_or_else(|| "pytorch/pytorch:latest".into());
+
+        let use_gpu = config
+            .docker
+            .as_ref()
+            .map(|d| d.gpu)
+            .unwrap_or(false);
+
+        Self {
+            image,
+            command: "python train.py".into(),
+            output_dir: format!("./experiments/run_{:03}", next_run_number),
+            use_gpu,
+            active_field: 1, // start on command field — image is usually correct
+            error_message: String::new(),
+        }
+    }
+
+    /// Get the active field's mutable value
+    pub fn active_value_mut(&mut self) -> Option<&mut String> {
+        match self.active_field {
+            0 => Some(&mut self.image),
+            1 => Some(&mut self.command),
+            2 => Some(&mut self.output_dir),
+            _ => None, // GPU field is a toggle, not text
+        }
+    }
+
+    /// Cycle to next field
+    pub fn next_field(&mut self) {
+        self.active_field = (self.active_field + 1) % 4;
+    }
+
+    /// Toggle GPU
+    pub fn toggle_gpu(&mut self) {
+        self.use_gpu = !self.use_gpu;
+    }
+}
+
+/// Sub-view within run detail
+#[derive(Debug, Clone, PartialEq)]
+pub enum DetailSubView {
+    Chart,
+    Hyperparams,
+    Logs,
 }
 
 /// Core application state
@@ -54,32 +120,36 @@ pub struct App {
     pub current_tags: Vec<String>,
     pub current_latest_metrics: Vec<(String, f64)>,
     pub current_hyperparams: Vec<HyperParam>,
+    pub detail_sub_view: DetailSubView,
+    pub container_logs: String,
+
+    // Compare state
+    pub compare_run_ids: Vec<i64>,
+    pub compare_data: Vec<(String, Vec<Metric>)>,
+    pub compare_metric_names: Vec<String>,
+    pub compare_selected_metric: usize,
+
+    // Search/Input
+    pub input_mode: InputMode,
+    pub search_query: String,
+    pub filtered_runs: Vec<Run>,
+    pub input_buffer: String,
+    pub tag_list_selected: usize,
+
+    // Run dialog
+    pub run_dialog: Option<RunDialogState>,
 
     // GPU monitoring
     pub gpu_monitor: Option<GpuMonitor>,
     pub gpu_stats: Option<GpuStats>,
     pub gpu_history: GpuHistory,
     pub gpu_processes: Vec<GpuProcess>,
-    pub last_gpu_poll: Option<Instant>,
+    pub last_gpu_poll: Instant,
+    pub gpu_poll_interval_secs: u64,
 
     // Docker
     pub docker: Option<DockerManager>,
-    pub docker_info: Option<DockerInfo>,
-
-    // Compare state
-    pub compare_run_ids: Vec<i64>,
-    pub compare_data: Vec<(Run, Vec<Metric>)>,
-    pub compare_metric_names: Vec<String>,
-    pub compare_selected_metric: usize,
-
-    // Tag list popup
-    pub tag_list_selected: usize,
-
-    // Search/Input
-    pub input_mode: InputMode,
-    pub input_buffer: String,
-    pub search_query: String,
-    pub filtered_runs: Vec<Run>,
+    pub docker_info: Option<crate::docker::DockerInfo>,
 
     // Help
     pub show_help: bool,
@@ -91,6 +161,14 @@ pub struct App {
 impl App {
     pub fn new(config: AppConfig, db: Database) -> Result<Self> {
         let runs = db.get_all_runs().unwrap_or_default();
+
+        let gpu_monitor = GpuMonitor::new();
+        let gpu_poll_interval = config.gpu.as_ref()
+            .map(|g| g.poll_interval_secs)
+            .unwrap_or(2);
+
+        let docker = DockerManager::new();
+        let docker_info = docker.as_ref().map(|d| d.check_health());
 
         Ok(Self {
             config,
@@ -107,6 +185,7 @@ impl App {
                 "Dashboard".into(),
                 "Detail".into(),
                 "Compare".into(),
+                "GPU".into(),
             ],
 
             current_run: None,
@@ -116,27 +195,31 @@ impl App {
             current_tags: Vec::new(),
             current_latest_metrics: Vec::new(),
             current_hyperparams: Vec::new(),
-
-            gpu_monitor: GpuMonitor::new(),
-            gpu_stats: None,
-            gpu_history: GpuHistory::new(120), // ~2 minutes at 1s polling
-            gpu_processes: Vec::new(),
-            last_gpu_poll: None,
-
-            docker: DockerManager::new(),
-            docker_info: None,
+            detail_sub_view: DetailSubView::Chart,
+            container_logs: String::new(),
 
             compare_run_ids: Vec::new(),
             compare_data: Vec::new(),
             compare_metric_names: Vec::new(),
             compare_selected_metric: 0,
 
-            tag_list_selected: 0,
-
             input_mode: InputMode::Normal,
-            input_buffer: String::new(),
             search_query: String::new(),
             filtered_runs: runs,
+            input_buffer: String::new(),
+            tag_list_selected: 0,
+
+            run_dialog: None,
+
+            gpu_monitor,
+            gpu_stats: None,
+            gpu_history: GpuHistory::new(300),
+            gpu_processes: Vec::new(),
+            last_gpu_poll: Instant::now(),
+            gpu_poll_interval_secs: gpu_poll_interval,
+
+            docker,
+            docker_info,
 
             show_help: false,
 
@@ -144,31 +227,305 @@ impl App {
         })
     }
 
-    // ─── Data Import (Day 2) ──────────────────────────────
+    // ─── Export ───────────────────────────────────────────
 
-    /// Import a log file: parse it, create/update run, insert metrics
+    /// Export current run as markdown
+    pub fn export_current_run_markdown(&self) -> Result<String> {
+        let run = self.current_run.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No run selected"))?;
+
+        let base_dir = export::export_base_dir(&self.config.resolved_watch_dirs());
+
+        let content = export::markdown::export_run_markdown(
+            run,
+            &self.current_metrics,
+            &self.current_hyperparams,
+            &self.current_tags,
+            &self.current_latest_metrics,
+        );
+
+        let path = export::write_export(&base_dir, &run.name, "md", &content)?;
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    /// Export current run metrics as CSV
+    pub fn export_current_run_csv(&self) -> Result<String> {
+        let run = self.current_run.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No run selected"))?;
+
+        let base_dir = export::export_base_dir(&self.config.resolved_watch_dirs());
+
+        let content = export::csv::export_run_csv(&run.name, &self.current_metrics);
+        let path = export::write_export(&base_dir, &run.name, "csv", &content)?;
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    /// Export current run as LaTeX
+    pub fn export_current_run_latex(&self) -> Result<String> {
+        let run = self.current_run.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No run selected"))?;
+
+        let base_dir = export::export_base_dir(&self.config.resolved_watch_dirs());
+
+        let content = export::latex::export_run_latex(
+            &run.name,
+            &self.current_hyperparams,
+            &self.current_latest_metrics,
+        );
+
+        let path = export::write_export(&base_dir, &run.name, "tex", &content)?;
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    /// Export compare view as markdown
+    pub fn export_compare_markdown(&self) -> Result<String> {
+        let base_dir = export::export_base_dir(&self.config.resolved_watch_dirs());
+        let content = export::markdown::export_compare_markdown(&self.compare_data);
+        let path = export::write_compare_export(&base_dir, "md", &content)?;
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    /// Export compare view as CSV
+    pub fn export_compare_csv(&self) -> Result<String> {
+        let base_dir = export::export_base_dir(&self.config.resolved_watch_dirs());
+        let content = export::csv::export_summary_csv(&self.compare_data);
+        let path = export::write_compare_export(&base_dir, "csv", &content)?;
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    /// Export compare view as LaTeX
+    pub fn export_compare_latex(&self) -> Result<String> {
+        let base_dir = export::export_base_dir(&self.config.resolved_watch_dirs());
+        let content = export::latex::export_compare_latex(&self.compare_data);
+        let path = export::write_compare_export(&base_dir, "tex", &content)?;
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    // ─── Docker Run Dialog ───────────────────────────────
+
+    /// Open the run dialog with defaults
+    pub fn open_run_dialog(&mut self) {
+        let next_num = self.runs.len() + 1;
+        self.run_dialog = Some(RunDialogState::new(&self.config, next_num));
+        self.input_mode = InputMode::RunDialog;
+    }
+
+    /// Execute the Docker run from dialog state
+    pub fn execute_docker_run(&mut self) -> Result<()> {
+        let dialog = self.run_dialog.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No run dialog open"))?
+            .clone();
+
+        // Pre-run checks
+        let docker = self.docker.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Docker not available"))?;
+
+        if let Some(info) = &self.docker_info {
+            if !info.running {
+                anyhow::bail!("Docker daemon is not running");
+            }
+            if dialog.use_gpu && !info.gpu_support {
+                anyhow::bail!("Docker GPU support not available. Install nvidia-container-toolkit.");
+            }
+        }
+
+        // VRAM check
+        if dialog.use_gpu {
+            if let Some(stats) = &self.gpu_stats {
+                let vram_threshold = self.config.gpu.as_ref()
+                    .map(|g| g.vram_critical as f32)
+                    .unwrap_or(95.0);
+                if stats.vram_percent() > vram_threshold {
+                    anyhow::bail!(
+                        "GPU VRAM is {:.0}% full ({}/{} MB). Risk of OOM.",
+                        stats.vram_percent(),
+                        stats.vram_used_mb,
+                        stats.vram_total_mb
+                    );
+                }
+            }
+        }
+
+        // Create output directory
+        let output_path = crate::platform::expand_path(&dialog.output_dir);
+        std::fs::create_dir_all(&output_path)?;
+
+        // Create run in database
+        let run_name = derive_run_name(&output_path);
+        let log_path = output_path.join("metrics.jsonl");
+        let run = self.db.insert_run(&run_name, &log_path.to_string_lossy())?;
+
+        // Get container workdir
+        let container_workdir = self.config.docker.as_ref()
+            .map(|d| d.container_workdir.clone())
+            .unwrap_or_else(|| "/workspace/output".into());
+
+        // Launch container
+        let docker = self.docker.as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Docker not available"))?;
+
+        let container_id = docker.run_container(
+            run.id,
+            &dialog.image,
+            &dialog.command,
+            &output_path.to_string_lossy(),
+            &container_workdir,
+            dialog.use_gpu,
+            &HashMap::new(),
+        )?;
+
+        self.set_status(format!(
+            "Started container {} for {}",
+            &container_id[..12.min(container_id.len())],
+            run_name
+        ));
+
+        // Refresh and clean up dialog
+        self.refresh_runs()?;
+        self.run_dialog = None;
+        self.input_mode = InputMode::Normal;
+
+        Ok(())
+    }
+
+    /// Update container logs for current run
+    pub fn refresh_container_logs(&mut self) {
+        if let Some(run) = &self.current_run {
+            if let Some(docker) = &self.docker {
+                if docker.is_running(run.id) {
+                    if let Ok(logs) = docker.get_logs(run.id, 50) {
+                        self.container_logs = logs;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Cycle detail sub-view
+    pub fn cycle_detail_sub_view(&mut self) {
+        self.detail_sub_view = match self.detail_sub_view {
+            DetailSubView::Chart => DetailSubView::Hyperparams,
+            DetailSubView::Hyperparams => DetailSubView::Logs,
+            DetailSubView::Logs => DetailSubView::Chart,
+        };
+
+        // Refresh logs when switching to logs view
+        if self.detail_sub_view == DetailSubView::Logs {
+            self.refresh_container_logs();
+        }
+    }
+
+    // ─── GPU ─────────────────────────────────────────────
+
+    pub fn poll_gpu_if_needed(&mut self) {
+        let elapsed = self.last_gpu_poll.elapsed().as_secs();
+        if elapsed < self.gpu_poll_interval_secs {
+            return;
+        }
+
+        if let Some(monitor) = &self.gpu_monitor {
+            if let Ok(stats) = monitor.poll_stats() {
+                self.gpu_history.push(stats.clone());
+                self.gpu_stats = Some(stats);
+            }
+            if let Ok(procs) = monitor.poll_processes() {
+                self.gpu_processes = procs;
+            }
+        }
+
+        self.last_gpu_poll = Instant::now();
+    }
+
+    // ─── Docker ──────────────────────────────────────────
+
+    pub fn poll_docker(&mut self) {
+        if let Some(docker) = &mut self.docker {
+            let updates = docker.poll_containers();
+            for (run_id, state) in updates {
+                let new_status = match &state {
+                    crate::docker::ContainerState::Exited(0) => RunStatus::Completed,
+                    crate::docker::ContainerState::Exited(_) => RunStatus::Failed,
+                    crate::docker::ContainerState::Failed(_) => RunStatus::Failed,
+                    _ => continue,
+                };
+
+                if self.db.update_run_status(run_id, &new_status).is_ok() {
+                    let status_msg = match &state {
+                        crate::docker::ContainerState::Exited(code) => {
+                            format!("Container exited (code {})", code)
+                        }
+                        crate::docker::ContainerState::Failed(msg) => {
+                            format!("Container failed: {}", msg)
+                        }
+                        _ => "Container stopped".to_string(),
+                    };
+                    self.set_status(status_msg);
+                    let _ = self.refresh_runs();
+                }
+            }
+        }
+    }
+
+    // ─── Compare ─────────────────────────────────────────
+
+    pub fn toggle_compare(&mut self, run_id: i64) {
+        if self.compare_run_ids.contains(&run_id) {
+            self.compare_run_ids.retain(|&id| id != run_id);
+        } else {
+            if self.compare_run_ids.len() >= 5 {
+                self.set_status("Maximum 5 runs for comparison");
+                return;
+            }
+            self.compare_run_ids.push(run_id);
+        }
+        let count = self.compare_run_ids.len();
+        self.set_status(format!("{} run(s) selected for comparison", count));
+    }
+
+    pub fn load_compare_data(&mut self) -> Result<()> {
+        self.compare_data.clear();
+        self.compare_metric_names.clear();
+
+        for &run_id in &self.compare_run_ids.clone() {
+            let run = self.db.get_run(run_id)?;
+            let metrics = self.db.get_metrics_for_run(run_id)?;
+
+            for m in &metrics {
+                if !self.compare_metric_names.contains(&m.name) {
+                    self.compare_metric_names.push(m.name.clone());
+                }
+            }
+
+            self.compare_data.push((run.name, metrics));
+        }
+
+        self.compare_selected_metric = 0;
+        Ok(())
+    }
+
+    pub fn is_selected_for_compare(&self, run_id: i64) -> bool {
+        self.compare_run_ids.contains(&run_id)
+    }
+
+    // ─── Data Import ─────────────────────────────────────
+
     pub fn import_log_file(&mut self, path: &Path) -> Result<()> {
         let path_str = path.to_string_lossy().to_string();
         let run_name = derive_run_name(path);
 
-        // Parse the log file
         let parsed = parse_log_file(path, &self.config.parser)?;
 
-        // Check if this run already exists
         let run = if let Some(existing) = self.db.get_run_by_path(&path_str)? {
             existing
         } else {
             self.db.insert_run(&run_name, &path_str)?
         };
 
-        // Get current metric count to determine where new data starts
         let existing_count = self.db.get_metric_count(run.id)? as usize;
 
-        // Only insert records we haven't seen yet
         if parsed.records.len() > existing_count {
             let new_records = &parsed.records[existing_count..];
 
-            // Flatten: each record may have multiple metrics (loss, acc, etc.)
             let batch: Vec<(i64, &str, Option<i64>, Option<i64>, f64)> = new_records
                 .iter()
                 .flat_map(|record| {
@@ -188,7 +545,6 @@ impl App {
             }
         }
 
-        // Import hyperparameters (upsert — replace if key already exists)
         for (key, value) in &parsed.hyperparams {
             self.db.conn.execute(
                 "INSERT OR REPLACE INTO hyperparams (run_id, key, value) VALUES (?1, ?2, ?3)",
@@ -196,13 +552,10 @@ impl App {
             )?;
         }
 
-        // Refresh the UI
         self.refresh_runs()?;
-
         Ok(())
     }
 
-    /// Scan watch directories and import all existing log files
     pub fn import_existing_files(&mut self) -> Result<usize> {
         let watch_dirs = self.config.resolved_watch_dirs();
         let files = crate::watcher::scan_existing_files(&watch_dirs);
@@ -212,7 +565,6 @@ impl App {
             match self.import_log_file(file) {
                 Ok(_) => imported += 1,
                 Err(e) => {
-                    // Don't fail the whole scan if one file is bad
                     eprintln!("Warning: failed to import {}: {}", file.display(), e);
                 }
             }
@@ -227,24 +579,17 @@ impl App {
 
     // ─── Navigation ──────────────────────────────────────
 
-    /// Refresh runs from the database
     pub fn refresh_runs(&mut self) -> Result<()> {
         self.runs = self.db.get_all_runs()?;
         self.apply_search_filter();
-
         if self.selected_run_index >= self.visible_runs().len() {
             self.selected_run_index = self.visible_runs().len().saturating_sub(1);
         }
-
         Ok(())
     }
 
     pub fn visible_runs(&self) -> &Vec<Run> {
-        if self.search_query.is_empty() {
-            &self.runs
-        } else {
-            &self.filtered_runs
-        }
+        if self.search_query.is_empty() { &self.runs } else { &self.filtered_runs }
     }
 
     pub fn selected_run(&self) -> Option<&Run> {
@@ -258,9 +603,13 @@ impl App {
         self.current_latest_metrics = self.db.get_latest_metrics(run_id)?;
         self.current_hyperparams = self.db.get_hyperparams_for_run(run_id)?;
         self.selected_metric_index = 0;
+        self.detail_sub_view = DetailSubView::Chart;
 
         let tags = self.db.get_tags_for_run(run_id)?;
         self.current_tags = tags.into_iter().map(|t| t.tag).collect();
+
+        // Load container logs if active
+        self.refresh_container_logs();
 
         Ok(())
     }
@@ -278,13 +627,9 @@ impl App {
         }
     }
 
-    // ─── Search ──────────────────────────────────────────
-
     fn apply_search_filter(&mut self) {
         let query = self.search_query.to_lowercase();
-        self.filtered_runs = self
-            .runs
-            .iter()
+        self.filtered_runs = self.runs.iter()
             .filter(|r| {
                 r.name.to_lowercase().contains(&query)
                     || r.status.to_string().to_lowercase().contains(&query)
@@ -300,23 +645,17 @@ impl App {
         self.selected_run_index = 0;
     }
 
-    // ─── Helpers ─────────────────────────────────────────
-
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_message = msg.into();
     }
 
     pub fn move_up(&mut self) {
-        if self.selected_run_index > 0 {
-            self.selected_run_index -= 1;
-        }
+        if self.selected_run_index > 0 { self.selected_run_index -= 1; }
     }
 
     pub fn move_down(&mut self) {
         let max = self.visible_runs().len().saturating_sub(1);
-        if self.selected_run_index < max {
-            self.selected_run_index += 1;
-        }
+        if self.selected_run_index < max { self.selected_run_index += 1; }
     }
 
     pub fn cycle_metric(&mut self) {
@@ -326,108 +665,6 @@ impl App {
         }
     }
 
-    // ─── GPU Monitoring ───────────────────────────────────
-
-    /// Poll GPU stats only if enough time has passed since the last poll
-    pub fn poll_gpu_if_needed(&mut self, interval: Duration) {
-        let should_poll = match self.last_gpu_poll {
-            Some(last) => last.elapsed() >= interval,
-            None => true,
-        };
-
-        if !should_poll {
-            return;
-        }
-
-        if let Some(monitor) = &self.gpu_monitor {
-            if let Ok(stats) = monitor.poll_stats() {
-                self.gpu_history.push(stats.clone());
-                self.gpu_stats = Some(stats);
-            }
-            if let Ok(procs) = monitor.poll_processes() {
-                self.gpu_processes = procs;
-            }
-            self.last_gpu_poll = Some(Instant::now());
-        }
-    }
-
-    // ─── Docker ───────────────────────────────────────────
-
-    /// Poll Docker containers and update run statuses for finished containers
-    pub fn poll_docker(&mut self) {
-        let updates = if let Some(mgr) = &mut self.docker {
-            mgr.poll_containers()
-        } else {
-            return;
-        };
-
-        for (run_id, state) in updates {
-            let new_status = match &state {
-                ContainerState::Exited(0) => RunStatus::Completed,
-                ContainerState::Exited(_) => RunStatus::Failed,
-                ContainerState::Failed(_) => RunStatus::Failed,
-                _ => continue,
-            };
-
-            if self.db.update_run_status(run_id, &new_status).is_ok() {
-                self.set_status(format!(
-                    "Run {} finished: {}",
-                    run_id,
-                    new_status
-                ));
-            }
-        }
-
-        let _ = self.refresh_runs();
-    }
-
-    // ─── Compare ──────────────────────────────────────────
-
-    /// Check if a run is marked for comparison
-    pub fn is_selected_for_compare(&self, run_id: i64) -> bool {
-        self.compare_run_ids.contains(&run_id)
-    }
-
-    /// Toggle a run in the compare set (max 5 runs)
-    pub fn toggle_compare(&mut self, run_id: i64) {
-        if let Some(pos) = self.compare_run_ids.iter().position(|&id| id == run_id) {
-            self.compare_run_ids.remove(pos);
-            self.compare_data.retain(|(r, _)| r.id != run_id);
-        } else if self.compare_run_ids.len() < 5 {
-            self.compare_run_ids.push(run_id);
-            if let Ok(run) = self.db.get_run(run_id) {
-                let metrics = self.db.get_metrics_for_run(run_id).unwrap_or_default();
-                self.compare_data.push((run, metrics));
-            }
-        } else {
-            self.set_status("Compare limit: max 5 runs");
-        }
-    }
-
-    /// Load all compare data and compute the union of metric names
-    pub fn load_compare_data(&mut self) -> Result<()> {
-        self.compare_data.clear();
-        self.compare_metric_names.clear();
-
-        let mut all_names = std::collections::BTreeSet::new();
-
-        for &run_id in &self.compare_run_ids.clone() {
-            let run = self.db.get_run(run_id)?;
-            let metrics = self.db.get_metrics_for_run(run_id)?;
-            let names = self.db.get_metric_names(run_id)?;
-            for name in &names {
-                all_names.insert(name.clone());
-            }
-            self.compare_data.push((run, metrics));
-        }
-
-        self.compare_metric_names = all_names.into_iter().collect();
-        self.compare_selected_metric = 0;
-
-        Ok(())
-    }
-
-    /// Cycle through metrics in compare view
     pub fn cycle_compare_metric(&mut self) {
         if !self.compare_metric_names.is_empty() {
             self.compare_selected_metric =
@@ -436,20 +673,8 @@ impl App {
     }
 }
 
-/// Derive a human-readable run name from a file path
-///
-/// If the filename is generic (like "metrics.jsonl"), use the parent dir name.
-/// Otherwise use the file stem.
-///
-/// Examples:
-///   "./experiments/run_001/metrics.jsonl" → "run_001"
-///   "./experiments/my_training.csv" → "my_training"
 fn derive_run_name(path: &Path) -> String {
-    let file_stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown");
-
+    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
     let generic_names = ["metrics", "log", "train", "training", "output", "results"];
 
     if generic_names.contains(&file_stem.to_lowercase().as_str()) {

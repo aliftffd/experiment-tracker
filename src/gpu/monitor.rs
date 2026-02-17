@@ -142,7 +142,7 @@ impl GpuMonitor {
 
         // verify it actually works
         let output = Command::new(&path_str)
-            .args(["--query-gpu=name", "--format=csv,nonheader"])
+            .args(["--query-gpu=name", "--format=csv,noheader"])
             .output()
             .ok()?;
 
