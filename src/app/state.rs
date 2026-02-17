@@ -13,10 +13,13 @@ use std::time::Instant;
 /// Which view/screen is active
 #[derive(Debug, Clone, PartialEq)]
 pub enum View {
+    Splash,
+    Menu,
     Dashboard,
     RunDetail,
     Compare,
     GpuMonitor,
+    Settings,
     Help,
 }
 
@@ -154,6 +157,12 @@ pub struct App {
     // Help
     pub show_help: bool,
 
+    // Menu
+    pub menu_selected: usize,
+
+    // Splash
+    pub splash_start: Instant,
+
     // Status bar
     pub status_message: String,
 }
@@ -174,7 +183,7 @@ impl App {
             config,
             db,
 
-            current_view: View::Dashboard,
+            current_view: View::Splash,
             previous_view: None,
             should_quit: false,
 
@@ -222,6 +231,9 @@ impl App {
             docker_info,
 
             show_help: false,
+
+            menu_selected: 0,
+            splash_start: Instant::now(),
 
             status_message: "Ready".into(),
         })
@@ -647,6 +659,23 @@ impl App {
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_message = msg.into();
+    }
+
+    pub fn db_file_size(&self) -> String {
+        let db_path = self.config.resolved_db_path();
+        match std::fs::metadata(&db_path) {
+            Ok(meta) => {
+                let bytes = meta.len();
+                if bytes < 1024 {
+                    format!("{} B", bytes)
+                } else if bytes < 1024 * 1024 {
+                    format!("{:.1} KB", bytes as f64 / 1024.0)
+                } else {
+                    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+                }
+            }
+            Err(_) => "unknown".to_string(),
+        }
     }
 
     pub fn move_up(&mut self) {

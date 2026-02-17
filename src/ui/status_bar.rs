@@ -68,7 +68,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         }
         (View::Compare, _) => " Esc:back  Tab:metric  m:md  e:csv  x:tex  ?:help ",
         (View::GpuMonitor, _) => " Esc/g:back  ?:help ",
+        (View::Settings, _) => " Esc:back  ?:help  q:quit ",
         (View::Help, _) => " ?/Esc:close ",
+        (View::Splash, _) => " Press any key... ",
+        (View::Menu, _) => " j/k:nav  Enter:select  1-5:shortcut  q:quit ",
     };
 
     // Build status line with optional GPU mini-summary

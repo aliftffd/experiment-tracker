@@ -68,6 +68,10 @@ pub enum Action {
     ExportCsv,
     ExportLatex,
 
+    // Menu
+    MenuSelect(usize),
+    SplashDismiss,
+
     // Misc
     Refresh,
     ToggleHelp,

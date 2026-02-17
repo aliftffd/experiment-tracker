@@ -52,6 +52,10 @@ struct Cli {
     /// Skip initial file scan on startup
     #[arg(long)]
     no_scan: bool,
+
+    /// Skip splash screen, go directly to menu
+    #[arg(long)]
+    no_splash: bool,
 }
 
 fn main() -> Result<()> {
@@ -81,6 +85,11 @@ fn main() -> Result<()> {
 
     // Create app
     let mut app = App::new(config.clone(), db)?;
+
+    // Skip splash if requested
+    if cli.no_splash {
+        app.current_view = crate::app::state::View::Menu;
+    }
 
     // Initial scan: import existing log files
     if !cli.no_scan {
@@ -180,6 +189,13 @@ fn run_event_loop(
                     }
                 }
             }
+        }
+
+        // Auto-dismiss splash after 2 seconds
+        if app.current_view == crate::app::state::View::Splash
+            && app.splash_start.elapsed() >= Duration::from_secs(2)
+        {
+            app.current_view = crate::app::state::View::Menu;
         }
 
         // Poll GPU stats

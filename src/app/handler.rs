@@ -15,6 +15,11 @@ pub fn handle_key_event(app: &App, key: KeyEvent) -> Action {
         InputMode::DeleteConfirm => handle_delete_confirm_keys(key),
         InputMode::RunDialog => handle_run_dialog_keys(app, key),
         InputMode::Normal => {
+            match app.current_view {
+                View::Splash => return Action::SplashDismiss,
+                View::Menu => return handle_menu_keys(key),
+                _ => {}
+            }
             if key.code == KeyCode::Char('q') {
                 return Action::Quit;
             }
@@ -23,7 +28,9 @@ pub fn handle_key_event(app: &App, key: KeyEvent) -> Action {
                 View::RunDetail => handle_run_detail_keys(key),
                 View::Compare => handle_compare_keys(key),
                 View::GpuMonitor => handle_gpu_keys(key),
+                View::Settings => handle_settings_keys(key),
                 View::Help => handle_help_keys(key),
+                View::Splash | View::Menu => Action::None, // already handled above
             }
         }
     }
@@ -31,6 +38,7 @@ pub fn handle_key_event(app: &App, key: KeyEvent) -> Action {
 
 fn handle_dashboard_keys(key: KeyEvent) -> Action {
     match key.code {
+        KeyCode::Esc => Action::Back,
         KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
         KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
         KeyCode::Enter | KeyCode::Char('l') => Action::Select,
@@ -91,6 +99,29 @@ fn handle_compare_keys(key: KeyEvent) -> Action {
 fn handle_gpu_keys(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('g') => Action::Back,
+        KeyCode::Char('?') => Action::ToggleHelp,
+        _ => Action::None,
+    }
+}
+
+fn handle_menu_keys(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+        KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+        KeyCode::Enter => Action::MenuSelect(usize::MAX), // sentinel: use current selection
+        KeyCode::Char('1') => Action::MenuSelect(0),
+        KeyCode::Char('2') => Action::MenuSelect(1),
+        KeyCode::Char('3') => Action::MenuSelect(2),
+        KeyCode::Char('4') => Action::MenuSelect(3),
+        KeyCode::Char('5') => Action::MenuSelect(4),
+        KeyCode::Char('q') => Action::Quit,
+        _ => Action::None,
+    }
+}
+
+fn handle_settings_keys(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc | KeyCode::Backspace => Action::Back,
         KeyCode::Char('?') => Action::ToggleHelp,
         _ => Action::None,
     }
@@ -177,7 +208,17 @@ pub fn execute_action(app: &mut App, action: Action) {
                     app.tag_list_selected -= 1;
                 }
             }
-            _ => app.move_up(),
+            _ => {
+                if app.current_view == View::Menu {
+                    if app.menu_selected == 0 {
+                        app.menu_selected = 5; // wrap to Quit
+                    } else {
+                        app.menu_selected -= 1;
+                    }
+                } else {
+                    app.move_up();
+                }
+            }
         },
 
         Action::MoveDown => match app.input_mode {
@@ -187,7 +228,17 @@ pub fn execute_action(app: &mut App, action: Action) {
                     app.tag_list_selected += 1;
                 }
             }
-            _ => app.move_down(),
+            _ => {
+                if app.current_view == View::Menu {
+                    if app.menu_selected >= 5 {
+                        app.menu_selected = 0; // wrap to Dashboard
+                    } else {
+                        app.menu_selected += 1;
+                    }
+                } else {
+                    app.move_down();
+                }
+            }
         },
 
         Action::Select => {
@@ -202,8 +253,19 @@ pub fn execute_action(app: &mut App, action: Action) {
         }
 
         Action::Back => {
-            app.go_back();
-            app.set_status("Ready");
+            match app.current_view {
+                // Top-level views go back to menu
+                View::Dashboard | View::GpuMonitor | View::Compare | View::Settings => {
+                    app.current_view = View::Menu;
+                    app.previous_view = None;
+                    app.set_status("Ready");
+                }
+                // Sub-views go to their parent
+                _ => {
+                    app.go_back();
+                    app.set_status("Ready");
+                }
+            }
         }
 
         Action::GoToDashboard => {
@@ -512,6 +574,55 @@ pub fn execute_action(app: &mut App, action: Action) {
             match result {
                 Ok(path) => app.set_status(format!("Exported: {}", path)),
                 Err(e) => app.set_status(format!("Export error: {}", e)),
+            }
+        }
+
+        // ─── Splash / Menu ─────────────────
+        Action::SplashDismiss => {
+            app.current_view = View::Menu;
+        }
+
+        Action::MenuSelect(index) => {
+            let selected = if index == usize::MAX {
+                app.menu_selected
+            } else {
+                index
+            };
+            match selected {
+                0 => {
+                    app.navigate_to(View::Dashboard);
+                    app.set_status("Ready");
+                }
+                1 => {
+                    if app.docker.is_some() {
+                        app.open_run_dialog();
+                    } else {
+                        app.set_status("Docker not available");
+                    }
+                }
+                2 => {
+                    app.navigate_to(View::GpuMonitor);
+                    app.set_status("GPU Monitor");
+                }
+                3 => {
+                    if app.compare_run_ids.is_empty() {
+                        app.set_status("No runs selected. Go to Dashboard and press Space to mark runs.");
+                    } else if app.load_compare_data().is_ok() {
+                        app.navigate_to(View::Compare);
+                        app.set_status(format!("Comparing {} runs", app.compare_run_ids.len()));
+                    }
+                }
+                4 => {
+                    app.navigate_to(View::Settings);
+                    app.set_status("Settings");
+                }
+                5 => {
+                    if let Some(docker) = &mut app.docker {
+                        docker.stop_all();
+                    }
+                    app.should_quit = true;
+                }
+                _ => {}
             }
         }
 

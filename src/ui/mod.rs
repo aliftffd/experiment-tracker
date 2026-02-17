@@ -1,11 +1,15 @@
+pub mod ascii_art;
 pub mod compare;
 pub mod components;
 pub mod dashboard;
 pub mod gpu_bar;
 pub mod gpu_screen;
+pub mod menu;
 pub mod popups;
 pub mod run_detail;
 pub mod run_dialog;
+pub mod settings;
+pub mod splash;
 pub mod status_bar;
 
 use ratatui::Frame;
@@ -14,10 +18,13 @@ use crate::app::state::{App, InputMode, View};
 
 pub fn render(app: &mut App, frame: &mut Frame) {
     match app.current_view {
+        View::Splash => splash::render(app, frame),
+        View::Menu => menu::render(app, frame),
         View::Dashboard => dashboard::render(app, frame),
         View::RunDetail => run_detail::render(app, frame),
         View::Compare => compare::render(app, frame),
         View::GpuMonitor => gpu_screen::render(app, frame),
+        View::Settings => settings::render(app, frame),
         View::Help => render_help(app, frame),
     }
 
@@ -91,6 +98,7 @@ fn render_help(app: &mut App, frame: &mut Frame) {
         "  ║  g           GPU monitor                          ║",
         "  ║  R           Run experiment (Docker)              ║",
         "  ║  r           Refresh                              ║",
+        "  ║  Esc         Back to menu                         ║",
         "  ║                                                  ║",
         "  ║  Run Detail                                      ║",
         "  ║  ──────────                                      ║",
@@ -109,7 +117,7 @@ fn render_help(app: &mut App, frame: &mut Frame) {
         "  ║  ────────────                                    ║",
         "  ║  Tab         Cycle metrics                        ║",
         "  ║  m/e/x       Export comparison (md/csv/tex)       ║",
-        "  ║  Esc         Back                                 ║",
+        "  ║  Esc         Back to menu                         ║",
         "  ║                                                  ║",
         "  ║  General                                         ║",
         "  ║  ───────                                         ║",
