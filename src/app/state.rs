@@ -160,9 +160,6 @@ pub struct App {
     // Menu
     pub menu_selected: usize,
 
-    // Splash
-    pub splash_start: Instant,
-
     // Status bar
     pub status_message: String,
 }
@@ -175,6 +172,9 @@ impl App {
         let gpu_poll_interval = config.gpu.as_ref()
             .map(|g| g.poll_interval_secs)
             .unwrap_or(2);
+
+        // Poll once immediately so splash shows real GPU info on first render
+        let initial_gpu_stats = gpu_monitor.as_ref().and_then(|m| m.poll_stats().ok());
 
         let docker = DockerManager::new();
         let docker_info = docker.as_ref().map(|d| d.check_health());
@@ -221,7 +221,7 @@ impl App {
             run_dialog: None,
 
             gpu_monitor,
-            gpu_stats: None,
+            gpu_stats: initial_gpu_stats,
             gpu_history: GpuHistory::new(300),
             gpu_processes: Vec::new(),
             last_gpu_poll: Instant::now(),
@@ -233,7 +233,6 @@ impl App {
             show_help: false,
 
             menu_selected: 0,
-            splash_start: Instant::now(),
 
             status_message: "Ready".into(),
         })

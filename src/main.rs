@@ -191,13 +191,6 @@ fn run_event_loop(
             }
         }
 
-        // Auto-dismiss splash after 2 seconds
-        if app.current_view == crate::app::state::View::Splash
-            && app.splash_start.elapsed() >= Duration::from_secs(2)
-        {
-            app.current_view = crate::app::state::View::Menu;
-        }
-
         // Poll GPU stats
         app.poll_gpu_if_needed();
 

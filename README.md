@@ -310,7 +310,3 @@ src/
 ```
 
 ---
-
-## License
-
-MIT
