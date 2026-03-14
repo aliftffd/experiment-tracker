@@ -67,14 +67,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
         let context_style = Style::default().fg(Color::DarkGray);
 
-        // Build the line content, pad to fit the box
-        let content = format!(
-            "   {} [{}]  {:<18}{}",
-            cursor, shortcut, label, context
-        );
-        // Pad to box width
-        let padded = format!("{:<47}", content);
-
         lines.push(Line::from(vec![
             Span::styled(left, Style::default().fg(Color::Cyan)),
             Span::styled(format!("   {} ", cursor), cursor_style),

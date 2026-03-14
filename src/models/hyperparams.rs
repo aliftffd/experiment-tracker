@@ -8,7 +8,7 @@ pub struct HyperParam {
     pub value: String,
 }
 
-/// Replacement a diff between 2 runs hyperparameters
+/// Represents a diff between 2 runs' hyperparameters
 #[derive(Debug, Clone)]
 pub struct HyperParamDiff {
     pub key: String,
@@ -17,7 +17,7 @@ pub struct HyperParamDiff {
 }
 
 impl HyperParamDiff {
-    pub fn is_differenct(&self) -> bool {
+    pub fn is_different(&self) -> bool {
         self.left != self.right
     }
 }

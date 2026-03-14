@@ -1,5 +1,12 @@
 use crate::models::{HyperParam, Metric, Run};
 
+/// Escape a string for use inside a markdown table cell
+fn escape_md(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('\n', " ")
+}
+
 /// Export a single run summary as markdown
 pub fn export_run_markdown(
     run: &Run,
@@ -44,7 +51,7 @@ pub fn export_run_markdown(
         md.push_str("| Parameter | Value |\n");
         md.push_str("|-----------|-------|\n");
         for hp in hyperparams {
-            md.push_str(&format!("| {} | {} |\n", hp.key, hp.value));
+            md.push_str(&format!("| {} | {} |\n", escape_md(&hp.key), escape_md(&hp.value)));
         }
     }
 
@@ -54,7 +61,7 @@ pub fn export_run_markdown(
         md.push_str("| Metric | Value |\n");
         md.push_str("|--------|-------|\n");
         for (name, value) in latest_metrics {
-            md.push_str(&format!("| {} | {:.6} |\n", name, value));
+            md.push_str(&format!("| {} | {:.6} |\n", escape_md(name), value));
         }
     }
 
@@ -115,7 +122,7 @@ pub fn export_compare_markdown(runs_data: &[(String, Vec<Metric>)]) -> String {
 
     md.push_str("| Metric |");
     for name in &run_names {
-        md.push_str(&format!(" {} |", name));
+        md.push_str(&format!(" {} |", escape_md(name)));
     }
     md.push('\n');
 
@@ -152,7 +159,7 @@ pub fn export_compare_markdown(runs_data: &[(String, Vec<Metric>)]) -> String {
                 .fold(f64::NEG_INFINITY, f64::max)
         };
 
-        md.push_str(&format!("| {} |", metric_name));
+        md.push_str(&format!("| {} |", escape_md(metric_name)));
         for val in &values {
             match val {
                 Some(v) => {

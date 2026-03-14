@@ -6,7 +6,7 @@ use crate::gpu::{GpuHistory, GpuMonitor, GpuProcess, GpuStats};
 use crate::models::{HyperParam, Metric, Run, RunStatus};
 use crate::watcher::parser::parse_log_file;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -187,7 +187,8 @@ impl App {
             previous_view: None,
             should_quit: false,
 
-            runs: runs.clone(),
+            filtered_runs: runs.clone(),
+            runs,
             selected_run_index: 0,
             selected_tab: 0,
             tab_titles: vec![
@@ -214,7 +215,6 @@ impl App {
 
             input_mode: InputMode::Normal,
             search_query: String::new(),
-            filtered_runs: runs,
             input_buffer: String::new(),
             tag_list_selected: 0,
 
@@ -328,7 +328,7 @@ impl App {
             .clone();
 
         // Pre-run checks
-        let docker = self.docker.as_ref()
+        let _ = self.docker.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Docker not available"))?;
 
         if let Some(info) = &self.docker_info {
@@ -497,17 +497,26 @@ impl App {
         self.compare_data.clear();
         self.compare_metric_names.clear();
 
-        for &run_id in &self.compare_run_ids.clone() {
-            let run = self.db.get_run(run_id)?;
-            let metrics = self.db.get_metrics_for_run(run_id)?;
+        // Batch-fetch all runs in a single query
+        let run_ids = self.compare_run_ids.clone();
+        let runs = self.db.get_runs_batch(&run_ids)?;
 
-            for m in &metrics {
-                if !self.compare_metric_names.contains(&m.name) {
-                    self.compare_metric_names.push(m.name.clone());
+        // Build a lookup map to preserve the user's selected order
+        let run_map: HashMap<i64, Run> = runs.into_iter().map(|r| (r.id, r)).collect();
+
+        let mut seen_metrics = HashSet::new();
+        for &run_id in &run_ids {
+            if let Some(run) = run_map.get(&run_id) {
+                let metrics = self.db.get_metrics_for_run(run_id)?;
+
+                for m in &metrics {
+                    if seen_metrics.insert(m.name.clone()) {
+                        self.compare_metric_names.push(m.name.clone());
+                    }
                 }
-            }
 
-            self.compare_data.push((run.name, metrics));
+                self.compare_data.push((run.name.clone(), metrics));
+            }
         }
 
         self.compare_selected_metric = 0;
@@ -526,41 +535,59 @@ impl App {
 
         let parsed = parse_log_file(path, &self.config.parser)?;
 
-        let run = if let Some(existing) = self.db.get_run_by_path(&path_str)? {
-            existing
-        } else {
-            self.db.insert_run(&run_name, &path_str)?
+        // Wrap all DB operations in a single transaction for atomicity
+        let status_msg = {
+            let tx = self.db.conn.unchecked_transaction()?;
+
+            let run = if let Some(existing) = self.db.get_run_by_path(&path_str)? {
+                existing
+            } else {
+                self.db.insert_run(&run_name, &path_str)?
+            };
+
+            let existing_count = self.db.get_metric_count(run.id)? as usize;
+
+            let msg = if parsed.records.len() > existing_count {
+                let new_records = &parsed.records[existing_count..];
+
+                let batch: Vec<(i64, &str, Option<i64>, Option<i64>, f64)> = new_records
+                    .iter()
+                    .flat_map(|record| {
+                        record.metrics.iter().map(move |(name, value)| {
+                            (run.id, name.as_str(), record.epoch, record.step, *value)
+                        })
+                    })
+                    .collect();
+
+                if !batch.is_empty() {
+                    self.db.insert_metrics_batch(&batch)?;
+                    Some(format!(
+                        "Imported {} metrics from {}",
+                        batch.len(),
+                        run_name
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if !parsed.hyperparams.is_empty() {
+                let hp_batch: Vec<(&str, &str)> = parsed
+                    .hyperparams
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                self.db.insert_hyperparams_batch(run.id, &hp_batch)?;
+            }
+
+            tx.commit()?;
+            msg
         };
 
-        let existing_count = self.db.get_metric_count(run.id)? as usize;
-
-        if parsed.records.len() > existing_count {
-            let new_records = &parsed.records[existing_count..];
-
-            let batch: Vec<(i64, &str, Option<i64>, Option<i64>, f64)> = new_records
-                .iter()
-                .flat_map(|record| {
-                    record.metrics.iter().map(move |(name, value)| {
-                        (run.id, name.as_str(), record.epoch, record.step, *value)
-                    })
-                })
-                .collect();
-
-            if !batch.is_empty() {
-                self.db.insert_metrics_batch(&batch)?;
-                self.set_status(format!(
-                    "Imported {} metrics from {}",
-                    batch.len(),
-                    run_name
-                ));
-            }
-        }
-
-        for (key, value) in &parsed.hyperparams {
-            self.db.conn.execute(
-                "INSERT OR REPLACE INTO hyperparams (run_id, key, value) VALUES (?1, ?2, ?3)",
-                rusqlite::params![run.id, key, value],
-            )?;
+        if let Some(msg) = status_msg {
+            self.set_status(msg);
         }
 
         self.refresh_runs()?;

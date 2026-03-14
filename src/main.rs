@@ -1,15 +1,3 @@
-mod app;
-mod config;
-mod db;
-mod docker;
-mod export;
-mod gpu;
-mod models;
-mod platform;
-mod ui;
-mod utils;
-mod watcher;
-
 use std::io;
 use std::time::Duration;
 
@@ -22,11 +10,13 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use crate::app::handler::{execute_action, handle_key_event};
-use crate::app::state::App;
-use crate::config::AppConfig;
-use crate::db::Database;
-use crate::watcher::directory::{DirectoryWatcher, WatchEvent};
+use experiment_tracker::app::handler::{execute_action, handle_key_event};
+use experiment_tracker::app::state::App;
+use experiment_tracker::config::AppConfig;
+use experiment_tracker::db::Database;
+use experiment_tracker::models;
+use experiment_tracker::ui;
+use experiment_tracker::watcher::directory::{DirectoryWatcher, WatchEvent};
 
 #[derive(Parser, Debug)]
 #[command(name = "experiment-tracker")]
@@ -88,7 +78,7 @@ fn main() -> Result<()> {
 
     // Skip splash if requested
     if cli.no_splash {
-        app.current_view = crate::app::state::View::Menu;
+        app.current_view = experiment_tracker::app::state::View::Menu;
     }
 
     // Initial scan: import existing log files

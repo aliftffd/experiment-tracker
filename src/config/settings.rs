@@ -2,8 +2,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::platform;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub general: GeneralConfig,
@@ -95,22 +93,51 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Load config from file , falling back to defaults
+    /// Load config from file, falling back to defaults
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let config_path = match path {
             Some(p) => p.to_path_buf(),
             None => Self::default_config_path(),
         };
 
-        if config_path.exists() {
+        let config = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
-                .with_context(|| format!("Failed to read config : {}", config_path.display()))?;
-            let config: AppConfig =
-                toml::from_str(&content).with_context(|| "Failed to parse config")?;
-            Ok(config)
+                .with_context(|| format!("Failed to read config: {}", config_path.display()))?;
+            toml::from_str(&content).with_context(|| "Failed to parse config")?
         } else {
-            Ok(AppConfig::default())
+            AppConfig::default()
+        };
+
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate config values are within acceptable ranges
+    pub fn validate(&self) -> Result<()> {
+        if self.general.watch_dirs.is_empty() {
+            anyhow::bail!("Config error: watch_dirs must not be empty");
         }
+        if self.general.refresh_rate_ms < 50 {
+            anyhow::bail!("Config error: refresh_rate_ms must be >= 50 (got {})", self.general.refresh_rate_ms);
+        }
+        if self.general.db_path.is_empty() {
+            anyhow::bail!("Config error: db_path must not be empty");
+        }
+        if let Some(gpu) = &self.gpu {
+            if gpu.poll_interval_secs < 1 {
+                anyhow::bail!("Config error: gpu.poll_interval_secs must be >= 1 (got {})", gpu.poll_interval_secs);
+            }
+            if gpu.temp_warning >= gpu.temp_critical {
+                anyhow::bail!("Config error: gpu.temp_warning ({}) must be < gpu.temp_critical ({})", gpu.temp_warning, gpu.temp_critical);
+            }
+            if gpu.vram_warning >= gpu.vram_critical {
+                anyhow::bail!("Config error: gpu.vram_warning ({}) must be < gpu.vram_critical ({})", gpu.vram_warning, gpu.vram_critical);
+            }
+        }
+        if self.ui.max_chart_points == 0 {
+            anyhow::bail!("Config error: ui.max_chart_points must be > 0");
+        }
+        Ok(())
     }
 
     /// Resolve the database path (expand ~)

@@ -139,6 +139,61 @@ impl Database {
         }
     }
 
+    /// Batch insert or replace hyperparameters for a run
+    pub fn insert_hyperparams_batch(&self, run_id: i64, params: &[(&str, &str)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO hyperparams (run_id, key, value) VALUES (?1, ?2, ?3)",
+            )?;
+            for (key, value) in params {
+                stmt.execute(rusqlite::params![run_id, key, value])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Get multiple runs by IDs in a single query
+    pub fn get_runs_batch(&self, ids: &[i64]) -> Result<Vec<Run>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders: String = (1..=ids.len())
+            .map(|i| format!("?{}", i))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, name, status, log_path, created_at, updated_at, notes FROM runs WHERE id IN ({}) ORDER BY updated_at DESC",
+            placeholders
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let runs = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok(Run {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    status: RunStatus::from(row.get::<_, String>(2)?.as_str()),
+                    log_path: row.get(3)?,
+                    created_at: NaiveDateTime::parse_from_str(
+                        &row.get::<_, String>(4)?,
+                        DATETIME_FMT,
+                    )
+                    .unwrap_or_default(),
+                    updated_at: NaiveDateTime::parse_from_str(
+                        &row.get::<_, String>(5)?,
+                        DATETIME_FMT,
+                    )
+                    .unwrap_or_default(),
+                    notes: row.get(6)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(runs)
+    }
+
     /// Get all hyperparameters for a run
     pub fn get_hyperparams_for_run(&self, run_id: i64) -> Result<Vec<crate::models::HyperParam>> {
         let mut stmt = self.conn.prepare(

@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use crate::platform;
 
-/// GPU statistics from a sinle poll
+/// GPU statistics from a single poll
 #[derive(Debug, Clone)]
 pub struct GpuStats {
     pub utilization_percent: u32,
@@ -29,14 +29,14 @@ impl GpuStats{
         (self.vram_used_mb as f32 / self.vram_total_mb as f32) * 100.0
     }
 
-    /// poser usage as percentage of limit
+    /// Power usage as percentage of limit
     pub fn power_percent(&self) -> f32 {
         if self.power_limit_watts <= 0.0 {
             return 0.0;
         }
         (self.power_draw_watts / self.power_limit_watts) * 100.0
     }
-    /// is CRAM cratically full ?
+    /// Is VRAM critically full?
     pub fn vram_critical(&self, threshold: f32) -> bool {
         self.vram_percent() > threshold
     }
@@ -104,7 +104,7 @@ impl GpuHistory {
         }
     }
 
-    // get utitilization for charting
+    // Get utilization for charting
     pub fn utilization_series(&self) -> Vec<f64> {
         self.ordered()
             .iter()
@@ -129,13 +129,13 @@ impl GpuHistory {
     }
 }
 
-/// The GPU monitor - pools nvidia-smi and parses results
+/// The GPU monitor - polls nvidia-smi and parses results
 pub struct GpuMonitor {
     nvidia_smi_path : String,
 }
 
 impl GpuMonitor {
-    ///.try to create a GPU monitor. returns non if no GPU is found
+    /// Try to create a GPU monitor. Returns None if no GPU is found.
     pub fn new() -> Option<Self> {
         let path = platform::find_nvidia_smi()?;
         let path_str = path.to_string_lossy().to_string();
@@ -155,7 +155,7 @@ impl GpuMonitor {
         }
     }
 
-    // pool current GPU statisitcs
+    /// Poll current GPU statistics
     pub fn poll_stats(&self) -> Result<GpuStats> {
         let output = Command::new(&self.nvidia_smi_path)
             .args([
@@ -196,7 +196,7 @@ impl GpuMonitor {
         })
     }
 
-    /// poll GPU processed (whats using VRAM)
+    /// Poll GPU processes (what's using VRAM)
     pub fn poll_processes(&self) -> Result<Vec<GpuProcess>> {
         let output = Command::new(&self.nvidia_smi_path)
             .args([

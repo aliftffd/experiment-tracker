@@ -21,7 +21,7 @@ pub struct TrackedContainer {
     pub state: ContainerState,
     pub image: String,
     pub command: String,
-    child: Option<Child>,
+    _child: Option<Child>,
 }
 
 /// Docker availability info
@@ -50,6 +50,9 @@ impl DockerManager {
     }
 
     /// Check Docker installation and capabilities
+    ///
+    /// The GPU support check is expensive (runs a container), so its result
+    /// is cached to disk keyed by Docker version.
     pub fn check_health(&self) -> DockerInfo {
         // Check version
         let version = Command::new(&self.docker_path)
@@ -70,22 +73,9 @@ impl DockerManager {
             .map(|s| s.success())
             .unwrap_or(false);
 
-        // Check GPU support
+        // Check GPU support — use cached result if docker version matches
         let gpu_support = if running {
-            Command::new(&self.docker_path)
-                .args([
-                    "run",
-                    "--rm",
-                    "--gpus",
-                    "all",
-                    "nvidia/cuda:12.1.0-base-ubuntu22.04",
-                    "nvidia-smi",
-                ])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
+            self.check_gpu_support_cached(&version)
         } else {
             false
         };
@@ -96,6 +86,49 @@ impl DockerManager {
             gpu_support,
             version,
         }
+    }
+
+    /// Check GPU support with disk-based caching to avoid running a container every startup
+    fn check_gpu_support_cached(&self, docker_version: &str) -> bool {
+        let cache_path = gpu_cache_path();
+
+        // Try to read cached result
+        if let Some(path) = &cache_path {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                let mut lines = content.lines();
+                if let (Some(cached_version), Some(cached_result)) = (lines.next(), lines.next()) {
+                    if cached_version == docker_version {
+                        return cached_result == "true";
+                    }
+                }
+            }
+        }
+
+        // Cache miss — run the actual check
+        let gpu_support = Command::new(&self.docker_path)
+            .args([
+                "run",
+                "--rm",
+                "--gpus",
+                "all",
+                "nvidia/cuda:12.1.0-base-ubuntu22.04",
+                "nvidia-smi",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        // Cache the result
+        if let Some(path) = &cache_path {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(path, format!("{}\n{}", docker_version, gpu_support));
+        }
+
+        gpu_support
     }
 
     /// Run a training container
@@ -132,11 +165,14 @@ impl DockerManager {
             args.push(format!("{}={}", key, value));
         }
 
-        // Image and command
-        args.push(image.to_string());
-        for part in command.split_whitespace() {
-            args.push(part.to_string());
+        // Validate image name (alphanumeric, dots, dashes, slashes, colons)
+        if !is_valid_image_name(image) {
+            anyhow::bail!("Invalid Docker image name: {}", image);
         }
+
+        // Image and command (shell-aware split to handle quoted arguments)
+        args.push(image.to_string());
+        args.extend(shell_split(command));
 
         let output = Command::new(&self.docker_path)
             .args(&args)
@@ -158,7 +194,7 @@ impl DockerManager {
                 state: ContainerState::Running,
                 image: image.to_string(),
                 command: command.to_string(),
-                child: None,
+                _child: None,
             },
         );
 
@@ -307,4 +343,61 @@ impl DockerManager {
             .map(|c| c.state == ContainerState::Running)
             .unwrap_or(false)
     }
+}
+
+/// Get the path for the GPU support cache file
+fn gpu_cache_path() -> Option<std::path::PathBuf> {
+    let cache_dir = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache"))
+        })?;
+    Some(cache_dir.join("experiment-tracker").join("gpu_support"))
+}
+
+/// Validate a Docker image name (registry/repo:tag format)
+fn is_valid_image_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 256 {
+        return false;
+    }
+    // Allow alphanumeric, dots, dashes, underscores, slashes, colons, and @ (for digests)
+    name.chars().all(|c| c.is_alphanumeric() || ".-_/:@".contains(c))
+}
+
+/// Split a command string respecting single and double quotes
+fn shell_split(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut chars = cmd.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            '\\' if in_double || (!in_single && !in_double) => {
+                if let Some(&next) = chars.peek() {
+                    current.push(next);
+                    chars.next();
+                }
+            }
+            ' ' | '\t' if !in_single && !in_double => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
 }

@@ -1,39 +1,48 @@
 use anyhow::Result;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 
-/// events the wather sends to the main app
+/// Minimum interval between events for the same file path
+const DEBOUNCE_MS: u64 = 200;
+
+/// Events the watcher sends to the main app
 #[derive(Debug, Clone)]
 pub enum WatchEvent {
     FileChanged(PathBuf), // new or modified log file was detected
     FileRemoved(PathBuf), // a file was removed
-    Error(String),        // an error occured in the watcher
+    Error(String),        // an error occurred in the watcher
 }
 
-/// watches directories for experiment log files
+/// Watches directories for experiment log files
 pub struct DirectoryWatcher {
     _watcher: RecommendedWatcher,
     pub receiver: mpsc::Receiver<WatchEvent>,
 }
 
 impl DirectoryWatcher {
-    /// Show the given directories
+    /// Watch the given directories for log file changes
     pub fn new(watch_dirs: &[PathBuf]) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
 
         let tx_clone = tx.clone();
+        let last_events: Arc<Mutex<HashMap<PathBuf, Instant>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let debounce_state = last_events.clone();
+
         let mut watcher = RecommendedWatcher::new(
             move |result: Result<Event, notify::Error>| {
                 match result {
                     Ok(event) => {
-                        // we oly care about file creation and modification
                         match event.kind {
                             EventKind::Create(_) | EventKind::Modify(_) => {
                                 for path in event.paths {
                                     if is_log_file(&path) {
-                                        let _ = tx_clone.send(WatchEvent::FileChanged(path));
+                                        if should_emit(&debounce_state, &path) {
+                                            let _ = tx_clone.send(WatchEvent::FileChanged(path));
+                                        }
                                     }
                                 }
                             }
@@ -127,10 +136,28 @@ fn scan_dir_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-/// check if a file is a supporte dlog format
-fn is_log_file(path: &Path) -> bool {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("jsonl") | Some("ndjson") | Some("csv") | Some("json") | Some("log") => true,
-        _ => false,
+/// Check if enough time has passed since the last event for this path (debounce)
+fn should_emit(state: &Arc<Mutex<HashMap<PathBuf, Instant>>>, path: &Path) -> bool {
+    let now = Instant::now();
+    let debounce = Duration::from_millis(DEBOUNCE_MS);
+    let mut map = match state.lock() {
+        Ok(m) => m,
+        Err(_) => return true, // poisoned mutex — emit anyway
+    };
+
+    if let Some(last) = map.get(path) {
+        if now.duration_since(*last) < debounce {
+            return false;
+        }
     }
+    map.insert(path.to_path_buf(), now);
+    true
+}
+
+/// Check if a file is a supported log format
+fn is_log_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("jsonl") | Some("ndjson") | Some("csv") | Some("json") | Some("log")
+    )
 }

@@ -83,7 +83,7 @@ pub fn default_config_path() -> PathBuf {
 
 /// get home directory cross platform
 pub fn home_dir() -> PathBuf {
-    /// Try home first (LINUX/macOS), then USERPROFILE (WINDOWS)
+    // Try home first (LINUX/macOS), then USERPROFILE (WINDOWS)
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
@@ -159,13 +159,13 @@ pub fn find_docker() -> Option<PathBuf> {
     None
 }
 
-/// Convert a host path to a docker compatiuble volume mount path
+/// Convert a host path to a docker compatible volume mount path
 pub fn to_docker_path(path: &std::path::Path) -> String {
     let path_str = path.to_string_lossy().to_string();
 
     if cfg!(target_os = "windows") {
-        // COnvert backlashes to forward shlases
-        let path_str = path_str.replace('\\', "/tmp/");
+        // Convert backslashes to forward slashes
+        let path_str = path_str.replace('\\', "/");
 
         // Convert C:/ to /c/
         if path_str.len() >= 2 && path_str.as_bytes()[1] == b':' {
@@ -179,7 +179,7 @@ pub fn to_docker_path(path: &std::path::Path) -> String {
     }
 }
 
-/// check if the terminal support unicode
+/// Check if the terminal supports unicode
 pub fn supports_unicode() -> bool {
     if cfg!(target_os = "windows") {
         // Windows Terminal and pwsh support Unicode

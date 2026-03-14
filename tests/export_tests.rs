@@ -169,6 +169,28 @@ fn test_latex_escapes_special_chars() {
 }
 
 #[test]
+fn test_markdown_escapes_pipe_in_table() {
+    let db = Database::open_memory().unwrap();
+    let run = db.insert_run("test-run", "/tmp/test.jsonl").unwrap();
+
+    // Insert a hyperparam with a pipe character in the value
+    db.insert_hyperparams_batch(run.id, &[("config", "a|b|c"), ("note", "x\\y")])
+        .unwrap();
+
+    let hyperparams = db.get_hyperparams_for_run(run.id).unwrap();
+    let tags = vec!["test".to_string()];
+
+    let md = markdown::export_run_markdown(&run, &[], &hyperparams, &tags, &[]);
+
+    // Pipes should be escaped in table cells
+    assert!(md.contains("a\\|b\\|c"));
+    // Backslashes should be escaped
+    assert!(md.contains("x\\\\y"));
+    // Table structure should remain valid
+    assert!(md.contains("| Parameter | Value |"));
+}
+
+#[test]
 fn test_latex_compare_bolds_best() {
     let (db, run_id) = setup_test_data();
     let metrics1 = db.get_metrics_for_run(run_id).unwrap();

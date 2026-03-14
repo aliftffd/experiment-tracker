@@ -7,7 +7,7 @@ pub struct Database {
 }
 
 impl Database {
-    /// Open or create tthe database at the given path
+    /// Open or create the database at the given path
     pub fn open(path: &Path) -> Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
